@@ -361,6 +361,7 @@ def normalize_timestamp(ts):
 def classify_financing_status(news_items):
     """
     Classify financing status from news items with time decay
+    Prioritizes ticker news with valid timestamps within 90 days
     Returns: 'PP_CLOSED', 'ANNOUNCED', 'ATM', 'SHELF', 'FINANCING_MENTIONED', or None
     """
     if not news_items:
@@ -370,17 +371,27 @@ def classify_financing_status(news_items):
     current_status = None
     most_recent_date = 0
     
-    for item in news_items:
+    # Sort by: 1) valid timestamps first, 2) most recent first, 3) ticker source before sector fallback
+    sorted_news = sorted(news_items, key=lambda x: (
+        not x.get('timestamp_valid', False),  # Valid timestamps first
+        -x.get('timestamp', 0),  # Most recent first (negative for descending)
+        x.get('source', 'ticker') == 'sector_fallback'  # Ticker news before sector
+    ))
+    
+    for item in sorted_news:
         title_lower = item.get('title', '').lower()
         ts = item.get('timestamp', 0)
+        timestamp_valid = item.get('timestamp_valid', False)
         
-        # Time decay: prioritize recent news (within 90 days = high weight)
-        if ts > 0:
+        # Prioritize valid timestamps within 90 days
+        if timestamp_valid and ts > 0:
             days_old = (now - ts) / 86400
-            if days_old > 180:  # Ignore news older than 6 months
+            if days_old > 90:  # Focus on last 90 days for financing status
                 continue
-        else:
-            days_old = 999  # Unknown date gets low priority
+        elif not timestamp_valid or ts <= 0:
+            # Invalid timestamps get lower priority (only if no valid timestamp news found)
+            if most_recent_date > 0:
+                continue
         
         # Check for specific financing lifecycle stages
         if any(phrase in title_lower for phrase in ['pp closed', 'private placement closed', 'financing closed', 'closed financing']):
@@ -1126,16 +1137,18 @@ def get_fundamentals_with_tracking(ticker):
     return result
 
 @st.cache_data(ttl=3600)
-def get_news_for_ticker(ticker):
-    """Fetch news"""
+def get_news_for_ticker(ticker, metal='Gold'):
+    """Fetch news with timestamp validation and sector fallback"""
     if not YFINANCE:
         return []
+    
+    formatted_news = []
+    has_valid_timestamps = False
     
     try:
         stock = yf.Ticker(ticker)
         news = stock.news[:25]
         
-        formatted_news = []
         for item in news:
             ts = None
             for field in ['providerPublishTime', 'published_at', 'pubDate']:
@@ -1144,17 +1157,56 @@ def get_news_for_ticker(ticker):
                     if ts:
                         break
             
+            timestamp_valid = ts is not None and ts > 0
+            if timestamp_valid:
+                has_valid_timestamps = True
+            
             formatted_news.append({
                 'title': item.get('title', ''),
                 'publisher': item.get('publisher', ''),
                 'link': item.get('link', '#'),
                 'timestamp': ts if ts else 0,
-                'date_str': datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d') if ts else 'Date: Unknown'
+                'timestamp_valid': timestamp_valid,
+                'date_str': datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d') if ts else 'Date: Unknown',
+                'source': 'ticker'
             })
-        
-        return tag_news(formatted_news)
     except:
-        return []
+        pass
+    
+    # Sector fallback if no ticker news or no valid timestamps
+    if len(formatted_news) == 0 or not has_valid_timestamps:
+        try:
+            # Select sector proxy based on metal type
+            if metal == 'Silver':
+                sector_ticker = "SILJ"
+            else:
+                sector_ticker = "GDXJ"  # Gold/other miners
+            
+            sector = yf.Ticker(sector_ticker)
+            sector_news = sector.news[:8]
+            
+            for item in sector_news:
+                ts = None
+                for field in ['providerPublishTime', 'published_at', 'pubDate']:
+                    if field in item:
+                        ts = normalize_timestamp(item[field])
+                        if ts:
+                            break
+                
+                timestamp_valid = ts is not None and ts > 0
+                formatted_news.append({
+                    'title': f"[Sector Fallback] {item.get('title', '')}",
+                    'publisher': item.get('publisher', 'Sector'),
+                    'link': item.get('link', '#'),
+                    'timestamp': ts if ts else 0,
+                    'timestamp_valid': timestamp_valid,
+                    'date_str': datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d') if ts else 'Date: Unknown',
+                    'source': 'sector_fallback'
+                })
+        except:
+            pass
+    
+    return tag_news(formatted_news)
 
 @st.cache_data(ttl=3600)
 def get_benchmark_data(metal):
@@ -1258,8 +1310,17 @@ with st.sidebar:
     st.session_state.portfolio = edited
     
     st.markdown("### 💰 Cash")
-    cash = st.number_input("Available", value=float(st.session_state.cash), step=1000.0, label_visibility="collapsed")
+    cash = st.number_input("Available", value=float(st.session_state.get('cash', 39569.65)), step=1000.0, label_visibility="collapsed")
     st.session_state.cash = cash
+    
+    st.markdown("---")
+    st.markdown("### 📊 Insider Signal")
+    insider_buying_override = st.checkbox(
+        "Insider Buying Detected? (Last 90d)",
+        value=st.session_state.get('insider_buying_override', False),
+        help="If checked, adds +10 points to Alpha_Score for ALL tickers (manual override)"
+    )
+    st.session_state.insider_buying_override = insider_buying_override
     
     st.markdown("---")
     st.markdown("### 📊 Display Options")
@@ -1320,13 +1381,23 @@ if 'gold_analysis' in st.session_state and 'silver_analysis' in st.session_state
         
         # SMC summary if available
         if 'results' in st.session_state:
-            df_results = st.session_state.results
-            bullish_smc = len(df_results[df_results.get('SMC_Bias', 'Neutral') == 'Bullish'])
-            bearish_smc = len(df_results[df_results.get('SMC_Bias', 'Neutral') == 'Bearish'])
-            st.caption(f"SMC Signals: {bullish_smc} ↑ Bullish, {bearish_smc} ↓ Bearish")
+            df_results = st.session_state.get('results', pd.DataFrame())
+            if not df_results.empty and 'SMC_Bias' in df_results.columns:
+                bullish_smc = len(df_results[df_results['SMC_Bias'] == 'Bullish'])
+                bearish_smc = len(df_results[df_results['SMC_Bias'] == 'Bearish'])
+                st.caption(f"SMC Signals: {bullish_smc} ↑ Bullish, {bearish_smc} ↓ Bearish")
+        
+        # Portfolio posture implication
+        posture_impl = metal_regime.get('regime', 'NEUTRAL')
+        if 'BEARISH' in posture_impl or 'DEFENSIVE' in posture_impl:
+            st.caption("**Portfolio Posture Implication:** Risk-off environment. Reduce exposure, favor producers, preserve capital.")
+        elif 'BULLISH' in posture_impl or 'RISK-ON' in posture_impl:
+            st.caption("**Portfolio Posture Implication:** Risk-on environment. Normal risk appetite, tactical opportunities available.")
+        else:
+            st.caption("**Portfolio Posture Implication:** Neutral/cautious. Selective additions, maintain defensive positions.")
 
 # Display macro banner
-if macro_regime['regime'] == 'DEFENSIVE':
+if macro_regime.get('regime') == 'DEFENSIVE':
     st.markdown(f"""
     <div class="warning-banner">
         <h2>⚠️ DEFENSIVE MODE - NO NEW BUYS</h2>
@@ -1334,7 +1405,7 @@ if macro_regime['regime'] == 'DEFENSIVE':
         <p><strong>DXY:</strong> {macro_regime.get('dxy', 'N/A')} | <strong>VIX:</strong> {macro_regime.get('vix', 'N/A')}</p>
     </div>
     """, unsafe_allow_html=True)
-elif macro_regime['regime'] == 'RISK-ON':
+elif macro_regime.get('regime') == 'RISK-ON':
     st.markdown(f"""
     <div class="safe-banner">
         <h2>✅ RISK-ON MODE - GREEN LIGHT</h2>
@@ -1439,7 +1510,8 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
     
     news_cache = {}
     for idx, row in df.iterrows():
-        news = get_news_for_ticker(row['Symbol'])
+        metal = row.get('metal', 'Gold') if 'metal' in df.columns else 'Gold'
+        news = get_news_for_ticker(row['Symbol'], metal)
         news_cache[row['Symbol']] = news
     
     # Calculate position metrics
@@ -1448,7 +1520,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
     df['Gain_Loss'] = df['Market_Value'] - df['Cost_Basis']
     df['Return_Pct'] = (df['Gain_Loss'] / df['Cost_Basis'] * 100)
     total_mv = df['Market_Value'].sum()
-    total_value = total_mv + st.session_state.cash  # Total portfolio value
+    total_value = total_mv + st.session_state.get('cash', 0)  # Total portfolio value
     df['Pct_Portfolio'] = (df['Market_Value'] / total_value * 100)  # vs TOTAL VALUE
     df['Runway'] = df['cash'] / df['burn']
     
@@ -1572,7 +1644,15 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
         else:
             alpha_result['alpha_score'] = sum(alpha_result['models'].values())
         
-        df.at[idx, 'Alpha_Score'] = alpha_result['alpha_score']
+        base_alpha = alpha_result['alpha_score']
+        
+        # Apply insider buying override if enabled
+        insider_override = st.session_state.get('insider_buying_override', False)
+        if insider_override:
+            base_alpha += 10.0
+            alpha_result['breakdown'].append(f"Insider Buying Override: +10.0 points (manual)")
+        
+        df.at[idx, 'Alpha_Score'] = base_alpha
         
         alpha_models_storage[row['Symbol']] = alpha_result['models']
         alpha_breakdown_storage[row['Symbol']] = alpha_result['breakdown']
@@ -1674,14 +1754,31 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
 
 # Helper functions for ranking
 def add_ranking_columns(df):
-    """Add ranking columns with explicit action priority"""
+    """Add ranking columns with explicit action priority (handles ⚠️ actions)"""
+    # Normalize action string for ranking (remove ⚠️ for comparison)
     ACTION_RANK = {
         '🟢 STRONG BUY': 7, '🟢 BUY': 6, '🟢 BUY ⚠️': 6,
         '🔵 ADD': 5, '🔵 ADD ⚠️': 5, '🔵 ACCUMULATE': 5,
         '⚪ HOLD': 4, '🟡 TRIM': 3, 
         '🔴 REDUCE': 2, '🔴 SELL': 1, '🚨 SELL NOW': 0
     }
-    df['Action_Rank'] = df['Action'].map(ACTION_RANK).fillna(4)
+    
+    # Map actions, handling ⚠️ variants
+    def get_action_rank(action):
+        if pd.isna(action):
+            return 4
+        action_str = str(action)
+        # Try exact match first
+        if action_str in ACTION_RANK:
+            return ACTION_RANK[action_str]
+        # Try without ⚠️
+        action_clean = action_str.replace(' ⚠️', '').replace('⚠️', '')
+        if action_clean in ACTION_RANK:
+            return ACTION_RANK[action_clean]
+        # Default
+        return 4
+    
+    df['Action_Rank'] = df['Action'].apply(get_action_rank)
     
     TIER_RANK = {'L3': 3, 'L2': 2, 'L1': 1, 'L0': 0}
     df['Tier_Rank'] = df['Liq_tier_code'].map(TIER_RANK).fillna(0)
@@ -1900,13 +1997,25 @@ if 'results' in st.session_state:
         df_sorted = sort_dataframe(df, sort_mode)
         
         for _, row in df_sorted.iterrows():
-            # Card style
-            if 'BUY' in row['Action']:
-                st.success(f"### {row['Symbol']} - {row['Action']}")
-            elif 'SELL' in row['Action'] or 'REDUCE' in row['Action']:
-                st.error(f"### {row['Symbol']} - {row['Action']}")
+            # Card style with liquidity warning for BUY/ADD actions
+            action_str = str(row['Action'])
+            action_display = action_str
+            
+            # Add liquidity warning ⚠️ for BUY/ADD with low liquidity
+            if any(x in action_str for x in ['BUY', 'ADD']) and action_str not in ['🔴 REDUCE', '🔴 SELL', '🚨 SELL NOW']:
+                liq_tier = row.get('Liq_tier_code', 'L0')
+                days_to_exit = row.get('Liq_days_to_exit', 99)
+                if liq_tier in ['L0', 'L1'] or days_to_exit > 5:
+                    if '⚠️' not in action_display:
+                        action_display = action_display + ' ⚠️'
+            
+            # Display with appropriate styling
+            if 'BUY' in action_str:
+                st.success(f"### {row['Symbol']} - {action_display}")
+            elif 'SELL' in action_str or 'REDUCE' in action_str:
+                st.error(f"### {row['Symbol']} - {action_display}")
             else:
-                st.info(f"### {row['Symbol']} - {row['Action']}")
+                st.info(f"### {row['Symbol']} - {action_display}")
             
             # Metrics
             c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -2005,28 +2114,55 @@ if 'results' in st.session_state:
                 
                 alpha_models = alpha_models_storage.get(row['Symbol'], {})
                 if alpha_models and isinstance(list(alpha_models.values())[0] if alpha_models else None, dict):
-                    # Display models using tabs (no nested expanders)
+                    # Display models using tabs (no nested expanders - Streamlit-safe)
                     sorted_models = sorted(alpha_models.items())
                     if len(sorted_models) > 0:
-                        # Create tabs for each model
-                        tab_labels = [f"{model_info.get('name', model_id)} ({model_info.get('weight_percent', 0):.0f}%)" 
-                                     for model_id, model_info in sorted_models if isinstance(model_info, dict)]
-                        tabs = st.tabs(tab_labels) if len(tab_labels) <= 8 else [None] * len(tab_labels)
+                        # Create tabs for each model with concise labels
+                        tab_labels = []
+                        for model_id, model_info in sorted_models:
+                            if isinstance(model_info, dict):
+                                name = model_info.get('name', model_id)
+                                weight = model_info.get('weight_percent', 0)
+                                tab_labels.append(f"{name} ({weight:.0f}%)")
                         
-                        for idx, (model_id, model_info) in enumerate(sorted_models):
-                            if isinstance(model_info, dict) and idx < len(tabs) and tabs[idx] is not None:
-                                with tabs[idx]:
-                                    st.caption(f"**Model ID:** {model_id}")
-                                    st.caption(f"**Inventor/Source:** {model_info.get('inventor', 'Unknown')}")
-                                    st.caption(f"**Weight:** {model_info.get('weight_percent', 0):.0f}%")
-                                    st.caption(f"**Raw Score:** {model_info.get('raw_score_0_100', 0):.0f}/100")
-                                    st.caption(f"**Contribution:** {model_info.get('contribution_points', 0):.1f} points")
-                                    st.markdown("---")
-                                    st.write(f"**Explanation:** {model_info.get('explanation', 'N/A')}")
+                        if len(tab_labels) > 0:
+                            tabs = st.tabs(tab_labels)
+                            
+                            for idx, (model_id, model_info) in enumerate(sorted_models):
+                                if isinstance(model_info, dict) and idx < len(tabs):
+                                    with tabs[idx]:
+                                        # Model info with popover for additional details
+                                        col1, col2 = st.columns([1, 20])
+                                        with col1:
+                                            with st.popover("ℹ️"):
+                                                st.write("**Model Details**")
+                                                st.write(f"**Model ID:** {model_id}")
+                                                st.write(f"**Name:** {model_info.get('name', 'Unknown')}")
+                                                st.write(f"**Inventor/Source:** {model_info.get('inventor', 'Unknown')}")
+                                                st.write(f"**Weight:** {model_info.get('weight_percent', 0):.0f}%")
+                                        
+                                        with col2:
+                                            st.write(f"**{model_info.get('name', model_id)}**")
+                                        
+                                        # Key metrics
+                                        col_a, col_b, col_c = st.columns(3)
+                                        with col_a:
+                                            st.metric("Raw Score", f"{model_info.get('raw_score_0_100', 0):.0f}/100")
+                                        with col_b:
+                                            st.metric("Weight", f"{model_info.get('weight_percent', 0):.0f}%")
+                                        with col_c:
+                                            st.metric("Contribution", f"{model_info.get('contribution_points', 0):.1f} pts")
+                                        
+                                        st.markdown("---")
+                                        
+                                        # Detailed breakdown
+                                        st.write(f"**Model ID:** `{model_id}`")
+                                        st.write(f"**Inventor/Source:** {model_info.get('inventor', 'Unknown')}")
+                                        st.write(f"**Explanation:** {model_info.get('explanation', 'N/A')}")
                     
                     # Total verification
                     calculated_total = sum(m.get('contribution_points', 0) for m in alpha_models.values())
-                    st.caption(f"**Total Alpha Score:** {calculated_total:.1f} (verification: {row.get('Alpha_Score', 0):.1f})")
+                    st.info(f"**Total Alpha Score:** {calculated_total:.1f} points | **Verification:** {row.get('Alpha_Score', 0):.1f} (diff: {abs(calculated_total - row.get('Alpha_Score', 0)):.1f})")
                 
                 # Fallback to breakdown list
                 alpha_breakdown = alpha_breakdown_storage.get(row['Symbol'], [])
@@ -2071,18 +2207,31 @@ if 'results' in st.session_state:
                 
                 ticker_news = news_cache.get(row['Symbol'], [])
                 if ticker_news:
-                    for item in ticker_news[:10]:
-                        tags = item.get('tag_string', '')
-                        date_str = item.get('date_str', 'Unknown')
-                        st.markdown(f"**{item['title']}** {tags}")
-                        st.caption(f"{item['publisher']} • {date_str}")
-                        st.markdown("")
+                    # Separate ticker news from sector fallback
+                    ticker_only = [n for n in ticker_news if n.get('source', 'ticker') != 'sector_fallback']
+                    sector_fallback = [n for n in ticker_news if n.get('source') == 'sector_fallback']
+                    
+                    if ticker_only:
+                        for item in ticker_only[:10]:
+                            tags = item.get('tag_string', '')
+                            date_str = item.get('date_str', 'Unknown')
+                            timestamp_valid = item.get('timestamp_valid', False)
+                            valid_badge = "✅" if timestamp_valid else "⚠️"
+                            st.markdown(f"{valid_badge} **{item['title']}** {tags}")
+                            st.caption(f"{item['publisher']} • {date_str}")
+                            st.markdown("")
+                    
+                    if sector_fallback:
+                        st.markdown("---")
+                        st.caption("**Sector Fallback News** (when ticker news unavailable)")
+                        for item in sector_fallback[:5]:
+                            tags = item.get('tag_string', '')
+                            date_str = item.get('date_str', 'Unknown')
+                            st.markdown(f"📊 **{item['title']}** {tags}")
+                            st.caption(f"{item.get('publisher', 'Sector')} • {date_str}")
+                            st.markdown("")
                 else:
-                    st.info("No ticker news - showing sector news")
-                    sector_news = get_sector_news_fallback()
-                    for item in sector_news[:5]:
-                        st.markdown(f"**{item['title']}**")
-                        st.caption(item.get('publisher', 'Market'))
+                    st.info("No news available for this ticker")
         
         # Export
         st.download_button(
