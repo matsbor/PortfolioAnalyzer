@@ -2005,14 +2005,24 @@ if 'results' in st.session_state:
                 
                 alpha_models = alpha_models_storage.get(row['Symbol'], {})
                 if alpha_models and isinstance(list(alpha_models.values())[0] if alpha_models else None, dict):
-                    # Display as expandable sections with full transparency
-                    for model_id, model_info in sorted(alpha_models.items()):
-                        if isinstance(model_info, dict):
-                            with st.expander(f"ℹ️ {model_info.get('name', model_id)} ({model_info.get('weight_percent', 0):.0f}% weight)"):
-                                st.caption(f"**Inventor/Source:** {model_info.get('inventor', 'Unknown')}")
-                                st.caption(f"**Raw Score:** {model_info.get('raw_score_0_100', 0):.0f}/100")
-                                st.caption(f"**Contribution:** {model_info.get('contribution_points', 0):.1f} points")
-                                st.caption(f"**Explanation:** {model_info.get('explanation', 'N/A')}")
+                    # Display models using tabs (no nested expanders)
+                    sorted_models = sorted(alpha_models.items())
+                    if len(sorted_models) > 0:
+                        # Create tabs for each model
+                        tab_labels = [f"{model_info.get('name', model_id)} ({model_info.get('weight_percent', 0):.0f}%)" 
+                                     for model_id, model_info in sorted_models if isinstance(model_info, dict)]
+                        tabs = st.tabs(tab_labels) if len(tab_labels) <= 8 else [None] * len(tab_labels)
+                        
+                        for idx, (model_id, model_info) in enumerate(sorted_models):
+                            if isinstance(model_info, dict) and idx < len(tabs) and tabs[idx] is not None:
+                                with tabs[idx]:
+                                    st.caption(f"**Model ID:** {model_id}")
+                                    st.caption(f"**Inventor/Source:** {model_info.get('inventor', 'Unknown')}")
+                                    st.caption(f"**Weight:** {model_info.get('weight_percent', 0):.0f}%")
+                                    st.caption(f"**Raw Score:** {model_info.get('raw_score_0_100', 0):.0f}/100")
+                                    st.caption(f"**Contribution:** {model_info.get('contribution_points', 0):.1f} points")
+                                    st.markdown("---")
+                                    st.write(f"**Explanation:** {model_info.get('explanation', 'N/A')}")
                     
                     # Total verification
                     calculated_total = sum(m.get('contribution_points', 0) for m in alpha_models.values())
