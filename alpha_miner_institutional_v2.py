@@ -259,8 +259,8 @@ def calculate_data_confidence(fund_dict, info_dict, inferred_flags):
 # ============================================================================
 
 def calculate_dilution_risk(runway, stage, drawdown_90d, news_items, 
-                           cash_missing, burn_missing, insider_buying):
-    """Calculate dilution risk"""
+                           cash_missing, burn_missing, insider_buying, financing_status=None):
+    """Calculate dilution risk with financing lifecycle awareness"""
     score = 0
     factors = []
     
@@ -289,18 +289,26 @@ def calculate_dilution_risk(runway, stage, drawdown_90d, news_items,
                        'needs cash' in item.get('title', '').lower() 
                        for item in news_items)
     
-    financing_news = any('financing' in item.get('title', '').lower() or 
-                        'placement' in item.get('title', '').lower() or
-                        'offering' in item.get('title', '').lower()
-                        for item in news_items)
-    
     if low_cash_news:
         score += 20
         factors.append("💀 'Low cash' in news (+20)")
     
-    if financing_news:
-        score += 15
-        factors.append("⚠️ Financing mentioned in news (+15)")
+    # Financing lifecycle impact
+    if financing_status == 'PP_CLOSED':
+        score = max(0, score - 10)  # PP closed reduces risk
+        factors.append("✅ PP Closed - dilution risk reduced (-10)")
+    elif financing_status == 'ATM':
+        score += 25  # ATM increases risk significantly
+        factors.append("⚠️ ATM offering active (+25)")
+    elif financing_status == 'SHELF':
+        score += 25  # Shelf increases risk significantly
+        factors.append("⚠️ Shelf offering active (+25)")
+    elif financing_status == 'ANNOUNCED':
+        score += 15  # Announced increases risk
+        factors.append("⚠️ Financing announced (+15)")
+    elif financing_status == 'FINANCING_MENTIONED':
+        score += 10
+        factors.append("⚠️ Financing mentioned in news (+10)")
     
     # Data quality
     if cash_missing:
@@ -334,7 +342,7 @@ def calculate_dilution_risk(runway, stage, drawdown_90d, news_items,
 # ============================================================================
 
 def normalize_timestamp(ts):
-    """Normalize timestamp to valid Unix timestamp"""
+    """Normalize timestamp to valid Unix timestamp, filtering out bogus dates (1964/1970/epoch)"""
     if ts is None or ts <= 0:
         return None
     
@@ -342,11 +350,62 @@ def normalize_timestamp(ts):
     if ts > 1e12:
         ts = ts / 1000
     
-    # Validate range (2000-2030)
+    # Validate range (2000-2030) - rejects epoch 0, 1964, 1970, etc.
+    # 946684800 = Jan 1, 2000
+    # 1893456000 = Jan 1, 2030
     if ts < 946684800 or ts > 1893456000:
         return None
     
     return ts
+
+def classify_financing_status(news_items):
+    """
+    Classify financing status from news items with time decay
+    Returns: 'PP_CLOSED', 'ANNOUNCED', 'ATM', 'SHELF', 'FINANCING_MENTIONED', or None
+    """
+    if not news_items:
+        return None
+    
+    now = datetime.datetime.now().timestamp()
+    current_status = None
+    most_recent_date = 0
+    
+    for item in news_items:
+        title_lower = item.get('title', '').lower()
+        ts = item.get('timestamp', 0)
+        
+        # Time decay: prioritize recent news (within 90 days = high weight)
+        if ts > 0:
+            days_old = (now - ts) / 86400
+            if days_old > 180:  # Ignore news older than 6 months
+                continue
+        else:
+            days_old = 999  # Unknown date gets low priority
+        
+        # Check for specific financing lifecycle stages
+        if any(phrase in title_lower for phrase in ['pp closed', 'private placement closed', 'financing closed', 'closed financing']):
+            if ts > most_recent_date:
+                current_status = 'PP_CLOSED'
+                most_recent_date = ts
+        elif any(phrase in title_lower for phrase in ['atm', 'at-the-market', 'at the market offering']):
+            if ts > most_recent_date:
+                current_status = 'ATM'
+                most_recent_date = ts
+        elif any(phrase in title_lower for phrase in ['shelf offering', 'shelf registration', 'shelf prospectus']):
+            if ts > most_recent_date:
+                current_status = 'SHELF'
+                most_recent_date = ts
+        elif any(phrase in title_lower for phrase in ['announces financing', 'announces placement', 'announces offering', 
+                                                        'proposed financing', 'intends to raise', 'plans to raise']):
+            if ts > most_recent_date:
+                current_status = 'ANNOUNCED'
+                most_recent_date = ts
+        elif any(word in title_lower for word in ['financing', 'placement', 'offering', 'capital raise']) and current_status is None:
+            if ts > most_recent_date:
+                current_status = 'FINANCING_MENTIONED'
+                most_recent_date = ts
+    
+    return current_status
 
 def tag_news(news_items):
     """Tag news items based on content"""
@@ -492,16 +551,14 @@ def calculate_smc_signals(hist_data, current_price):
 
 def calculate_alpha_models(row, hist_data, benchmark_data):
     """
-    Calculate 6-model alpha score
-    NOTE: Model 7 (SMC) will be added to this score AFTER SMC calculation
+    Calculate 8-model alpha score with full transparency
+    Returns models dict with metadata (name, inventor, weight, raw_score, contribution, explanation)
     """
     models = {}
     breakdown = []
     
-    # M1: Momentum (20%)
+    # M1: Momentum (20%) - Price momentum over 30d
     ret_30d = row.get('Return_30d', 0)
-    ret_90d = row.get('Return_90d', 0)
-    
     momentum_score = 50
     if ret_30d > 10:
         momentum_score = 75
@@ -512,12 +569,19 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
     elif ret_30d < -5:
         momentum_score = 35
     
-    models['M1_Momentum'] = momentum_score * 0.20
-    breakdown.append(f"M1 Momentum: {momentum_score}/100 × 20% = {models['M1_Momentum']:.1f}")
+    contribution = momentum_score * 0.20
+    models['M1_Momentum'] = {
+        'name': 'Price Momentum',
+        'inventor': 'Technical Analysis (Universal)',
+        'weight_percent': 20.0,
+        'raw_score_0_100': momentum_score,
+        'contribution_points': contribution,
+        'explanation': f"30d return: {ret_30d:.1f}%"
+    }
+    breakdown.append(f"M1 Momentum: {momentum_score}/100 × 20% = {contribution:.1f}")
     
-    # M2: Value Positioning (15%)
+    # M2: Value Positioning (15%) - Relative to 52w high
     pct_from_high = row.get('Pct_From_52w_High', 0)
-    
     value_score = 50
     if pct_from_high < -40:
         value_score = 80
@@ -526,10 +590,18 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
     elif pct_from_high > -5:
         value_score = 30
     
-    models['M2_Value'] = value_score * 0.15
-    breakdown.append(f"M2 Value: {value_score}/100 × 15% = {models['M2_Value']:.1f}")
+    contribution = value_score * 0.15
+    models['M2_Value'] = {
+        'name': 'Value Positioning',
+        'inventor': 'Technical Analysis (Universal)',
+        'weight_percent': 15.0,
+        'raw_score_0_100': value_score,
+        'contribution_points': contribution,
+        'explanation': f"{pct_from_high:.1f}% from 52w high"
+    }
+    breakdown.append(f"M2 Value: {value_score}/100 × 15% = {contribution:.1f}")
     
-    # M3: Survival Quality (20%)
+    # M3: Survival Quality (20%) - Runway adjusted by data confidence
     runway = row.get('Runway', 12)
     data_conf = row.get('Data_Confidence', 50)
     
@@ -544,25 +616,50 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
     # Adjust by data confidence
     survival_score = survival_score * (data_conf / 100)
     
-    models['M3_Survival'] = survival_score * 0.20
-    breakdown.append(f"M3 Survival: {survival_score:.0f}/100 × 20% = {models['M3_Survival']:.1f}")
+    contribution = survival_score * 0.20
+    models['M3_Survival'] = {
+        'name': 'Survival Quality',
+        'inventor': 'Financial Analysis (Custom)',
+        'weight_percent': 20.0,
+        'raw_score_0_100': survival_score,
+        'contribution_points': contribution,
+        'explanation': f"Runway: {runway:.1f}mo, adjusted by confidence {data_conf:.0f}%"
+    }
+    breakdown.append(f"M3 Survival: {survival_score:.0f}/100 × 20% = {contribution:.1f}")
     
-    # M4: Dilution Penalty (13%)
+    # M4: Dilution Penalty (13%) - Inverse of dilution risk
     dil_risk = row.get('Dilution_Risk_Score', 50)
     dilution_score = 100 - dil_risk
     
-    models['M4_Dilution'] = dilution_score * 0.13
-    breakdown.append(f"M4 Dilution: {dilution_score:.0f}/100 × 13% = {models['M4_Dilution']:.1f}")
+    contribution = dilution_score * 0.13
+    models['M4_Dilution'] = {
+        'name': 'Dilution Risk Penalty',
+        'inventor': 'Financial Analysis (Custom)',
+        'weight_percent': 13.0,
+        'raw_score_0_100': dilution_score,
+        'contribution_points': contribution,
+        'explanation': f"Inverse of dilution risk: {dil_risk:.0f}/100"
+    }
+    breakdown.append(f"M4 Dilution: {dilution_score:.0f}/100 × 13% = {contribution:.1f}")
     
-    # M5: Liquidity (8%)
+    # M5: Liquidity (8%) - Tier-based
     tier = row.get('Liq_tier_code', 'L0')
     liq_score = {'L3': 90, 'L2': 70, 'L1': 50, 'L0': 20}.get(tier, 50)
     
-    models['M5_Liquidity'] = liq_score * 0.08
-    breakdown.append(f"M5 Liquidity: {liq_score}/100 × 8% = {models['M5_Liquidity']:.1f}")
+    contribution = liq_score * 0.08
+    models['M5_Liquidity'] = {
+        'name': 'Liquidity Score',
+        'inventor': 'Market Microstructure (Custom)',
+        'weight_percent': 8.0,
+        'raw_score_0_100': liq_score,
+        'contribution_points': contribution,
+        'explanation': f"Tier: {tier}"
+    }
+    breakdown.append(f"M5 Liquidity: {liq_score}/100 × 8% = {contribution:.1f}")
     
-    # M6: Relative Strength (8%)
+    # M6: Relative Strength (8%) - Stock vs benchmark (Robert Levy, 1967)
     rel_score = 50
+    explanation = "No benchmark data"
     if benchmark_data is not None and not hist_data.empty:
         try:
             stock_ret = ((hist_data['Close'].iloc[-1] - hist_data['Close'].iloc[-90]) / 
@@ -577,16 +674,33 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
                 rel_score = 60
             elif outperformance < -10:
                 rel_score = 30
+            
+            explanation = f"Outperformance: {outperformance:.1f}% vs benchmark"
         except:
             pass
     
-    models['M6_RelStrength'] = rel_score * 0.08
-    breakdown.append(f"M6 RelStrength: {rel_score}/100 × 8% = {models['M6_RelStrength']:.1f}")
+    contribution = rel_score * 0.08
+    models['M6_RelStrength'] = {
+        'name': 'Relative Strength',
+        'inventor': 'Robert Levy (1967)',
+        'weight_percent': 8.0,
+        'raw_score_0_100': rel_score,
+        'contribution_points': contribution,
+        'explanation': explanation
+    }
+    breakdown.append(f"M6 RelStrength: {rel_score}/100 × 8% = {contribution:.1f}")
     
-    # M7: SMC (8%) - will be added later after SMC calculation
-    # For now, use neutral 50
-    models['M7_SMC'] = 50 * 0.08
-    breakdown.append(f"M7 SMC: 50/100 × 8% = {models['M7_SMC']:.1f} (calculated later)")
+    # M7: SMC (8%) - Will be updated after SMC calculation
+    contribution = 50 * 0.08
+    models['M7_SMC'] = {
+        'name': 'Smart Money Concepts',
+        'inventor': 'ICT / Smart Money Concepts (2020s)',
+        'weight_percent': 8.0,
+        'raw_score_0_100': 50,
+        'contribution_points': contribution,
+        'explanation': 'Calculated separately (placeholder)'
+    }
+    breakdown.append(f"M7 SMC: 50/100 × 8% = {contribution:.1f} (calculated later)")
     
     # M8: Stage/Metal Fit (8%)
     stage = row.get('stage', 'Explorer')
@@ -598,11 +712,19 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
     elif stage == 'Developer':
         stage_score = 60
     
-    models['M8_StageFit'] = stage_score * 0.08
-    breakdown.append(f"M8 StageFit: {stage_score}/100 × 8% = {models['M8_StageFit']:.1f}")
+    contribution = stage_score * 0.08
+    models['M8_StageFit'] = {
+        'name': 'Stage/Metal Fit',
+        'inventor': 'Fundamental Analysis (Custom)',
+        'weight_percent': 8.0,
+        'raw_score_0_100': stage_score,
+        'contribution_points': contribution,
+        'explanation': f"{stage} stage, {metal} focus"
+    }
+    breakdown.append(f"M8 StageFit: {stage_score}/100 × 8% = {contribution:.1f}")
     
     # Calculate total (before SMC adjustment)
-    alpha_score = sum(models.values())
+    alpha_score = sum(m['contribution_points'] for m in models.values())
     
     return {
         'alpha_score': alpha_score,
@@ -759,7 +881,7 @@ def check_discovery_exception(row, liq_metrics, alpha_score, data_confidence,
                               dilution_risk, momentum_ok):
     """
     Check if discovery exception applies
-    Enhanced version with SMC check if available
+    CRITICAL: Requires Days_to_Exit <= 10, Alpha >= 85, Confidence >= 70, Dilution < 70
     """
     # Basic checks
     if liq_metrics.get('tier_code') == 'L0':
@@ -777,6 +899,11 @@ def check_discovery_exception(row, liq_metrics, alpha_score, data_confidence,
     if dilution_risk >= 70:
         return (False, f"Dilution {dilution_risk:.0f} ≥ 70")
     
+    # CRITICAL: Days_to_Exit must be <= 10
+    days_to_exit = liq_metrics.get('days_to_exit', 99)
+    if days_to_exit > 10:
+        return (False, f"Days_to_Exit {days_to_exit:.1f} > 10 (required: ≤10)")
+    
     if not momentum_ok:
         return (False, "Momentum not confirmed")
     
@@ -792,7 +919,7 @@ def check_discovery_exception(row, liq_metrics, alpha_score, data_confidence,
             return (False, "Metal regime bearish - discovery blocked")
     
     # Exception granted
-    return (True, f"High conviction: Alpha {alpha_score:.0f}, momentum confirmed")
+    return (True, f"High conviction: Alpha {alpha_score:.0f}, Days_to_Exit {days_to_exit:.1f} ≤ 10, momentum confirmed")
 
 # ============================================================================
 # J) FINAL ARBITRATION
@@ -802,6 +929,8 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
                              alpha_score, macro_regime, discovery):
     """
     Final decision arbitration
+    CRITICAL: High sell risk MUST downgrade to REDUCE/SELL
+    Discovery exception caps at 2.5% and adds ⚠️ to action
     """
     decision = {
         'action': '⚪ HOLD',
@@ -818,7 +947,20 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
     liq_tier = liq_metrics.get('tier_code', 'L0')
     conf_score = data_conf['score']
     dil_score = dilution['score']
-    sell_score = sell_risk['score']
+    sell_score = sell_risk.get('score', 0)
+    
+    # CRITICAL: Sell risk takes precedence - high sell risk downgrades action
+    # Ensure we use real triggers from sell_risk dict
+    hard_triggers = sell_risk.get('hard_triggers', [])
+    soft_triggers = sell_risk.get('soft_triggers', [])
+    
+    if sell_score >= 60:
+        decision['action'] = '🚨 SELL NOW'
+        decision['confidence'] = 90
+        decision['recommended_pct'] = 0
+        decision['reasoning'].extend(hard_triggers)
+        decision['gates_failed'].append(f"🔴 Sell risk {sell_score}/100 CRITICAL")
+        return decision
     
     # Hard gates
     if not macro_regime.get('allow_new_buys', True):
@@ -826,14 +968,7 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
         if sell_score >= 30:
             decision['action'] = '🔴 REDUCE'
             decision['recommended_pct'] = row.get('Pct_Portfolio', 0) * 0.5
-        return decision
-    
-    if sell_score >= 60:
-        decision['action'] = '🚨 SELL NOW'
-        decision['confidence'] = 90
-        decision['recommended_pct'] = 0
-        decision['reasoning'].extend(sell_risk['hard_triggers'])
-        decision['gates_failed'].append(f"🔴 Sell risk {sell_score}/100 CRITICAL")
+            decision['reasoning'].extend(soft_triggers[:2])
         return decision
     
     if conf_score < 40:
@@ -841,28 +976,37 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
         decision['action'] = '⚪ HOLD'
         return decision
     
+    # CRITICAL: High dilution risk downgrades to REDUCE/SELL
+    if dil_score >= 70:
+        if sell_score >= 30:
+            decision['action'] = '🔴 REDUCE'
+            decision['confidence'] = 80
+            decision['recommended_pct'] = row.get('Pct_Portfolio', 0) * 0.5
+            decision['reasoning'].append(f"💀 Dilution risk {dil_score}/100 CRITICAL")
+            decision['reasoning'].extend(soft_triggers[:2])
+            return decision
+    
     # Size caps
     tier_caps = {'L3': 10.0, 'L2': 7.5, 'L1': 5.0, 'L0': 1.0}
     base_max = tier_caps.get(liq_tier, 1.0)
     
-    # Apply discovery exception if granted
+    # Apply discovery exception if granted (cap at 2.5%)
     if discovery[0]:
         base_max = min(base_max, 2.5)
         decision['warnings'].append("⚠️ Discovery exception: max 2.5%")
-        decision['action'] = '🔵 ADD ⚠️'
     
     # Apply macro throttle
     base_max *= macro_regime.get('throttle_factor', 1.0)
     decision['max_allowed_pct'] = base_max
     
-    # Decision logic
+    # Decision logic (sell risk still checked)
     current_pct = row.get('Pct_Portfolio', 0)
     
     if sell_score >= 40:
         decision['action'] = '🔴 REDUCE'
         decision['confidence'] = 75
         decision['recommended_pct'] = current_pct * 0.5
-        decision['reasoning'].extend(sell_risk['soft_triggers'][:2])
+        decision['reasoning'].extend(soft_triggers[:2])
     
     elif sell_score >= 20:
         decision['action'] = '🟡 TRIM'
@@ -878,11 +1022,19 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
             decision['confidence'] = 80
         
         decision['recommended_pct'] = min(base_max, current_pct + 2.0)
+        
+        # Add discovery warning to action if applicable
+        if discovery[0]:
+            decision['action'] = decision['action'].replace('BUY', 'BUY ⚠️')
     
     elif alpha_score >= 60 and current_pct < base_max * 0.8:
         decision['action'] = '🔵 ADD'
         decision['confidence'] = 70
         decision['recommended_pct'] = min(base_max * 0.8, current_pct + 1.0)
+        
+        # Add discovery warning to action if applicable
+        if discovery[0]:
+            decision['action'] = '🔵 ADD ⚠️'
     
     else:
         decision['action'] = '⚪ HOLD'
@@ -997,7 +1149,7 @@ def get_news_for_ticker(ticker):
                 'publisher': item.get('publisher', ''),
                 'link': item.get('link', '#'),
                 'timestamp': ts if ts else 0,
-                'date_str': datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d') if ts else 'Unknown'
+                'date_str': datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d') if ts else 'Date: Unknown'
             })
         
         return tag_news(formatted_news)
@@ -1130,6 +1282,48 @@ st.caption("World-Class Capital Allocation Engine • Survival > Alpha • Sell-
 
 # Get macro regime
 macro_regime = calculate_macro_regime()
+
+# Display metal outlook at top if available
+if 'gold_analysis' in st.session_state and 'silver_analysis' in st.session_state:
+    gold_analysis = st.session_state.get('gold_analysis', {})
+    silver_analysis = st.session_state.get('silver_analysis', {})
+    metal_regime = st.session_state.get('metal_regime', {})
+    
+    st.markdown("---")
+    st.header("📊 METAL OUTLOOK & PORTFOLIO POSTURE")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.subheader(f"🥇 Gold: ${gold_analysis.get('current_price', 0):,.0f}")
+        st.write(f"**Today:** {gold_analysis.get('forecast_today', '↔')}")
+        st.write(f"**1 Week:** {gold_analysis.get('forecast_week', '↔')} ({gold_analysis.get('bias_short', 'NEUTRAL')})")
+        st.write(f"**1-2 Months:** {gold_analysis.get('forecast_month', '↔')} ({gold_analysis.get('bias_medium', 'NEUTRAL')})")
+        st.caption(gold_analysis.get('explanation', ''))
+    
+    with col2:
+        st.subheader(f"🥈 Silver: ${silver_analysis.get('current_price', 0):.2f}")
+        st.write(f"**Today:** {silver_analysis.get('forecast_today', '↔')}")
+        st.write(f"**1 Week:** {silver_analysis.get('forecast_week', '↔')} ({silver_analysis.get('bias_short', 'NEUTRAL')})")
+        st.write(f"**1-2 Months:** {silver_analysis.get('forecast_month', '↔')} ({silver_analysis.get('bias_medium', 'NEUTRAL')})")
+        st.caption(silver_analysis.get('explanation', ''))
+    
+    with col3:
+        st.subheader("📋 Portfolio Posture")
+        posture = metal_regime.get('regime', 'NEUTRAL')
+        if 'BEARISH' in posture or 'DEFENSIVE' in posture:
+            st.error(f"🛑 **{posture}** - Reduce risk, favor producers")
+        elif 'BULLISH' in posture or 'RISK-ON' in posture:
+            st.success(f"✅ **{posture}** - Normal risk appetite")
+        else:
+            st.info(f"📊 **{posture}** - Cautious approach")
+        
+        # SMC summary if available
+        if 'results' in st.session_state:
+            df_results = st.session_state.results
+            bullish_smc = len(df_results[df_results.get('SMC_Bias', 'Neutral') == 'Bullish'])
+            bearish_smc = len(df_results[df_results.get('SMC_Bias', 'Neutral') == 'Bearish'])
+            st.caption(f"SMC Signals: {bullish_smc} ↑ Bullish, {bearish_smc} ↓ Bearish")
 
 # Display macro banner
 if macro_regime['regime'] == 'DEFENSIVE':
@@ -1285,9 +1479,16 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
     progress.progress(60, text="💀 Dilution risk...")
     
     dilution_factors_storage = {}
+    financing_status_storage = {}
     
     for idx, row in df.iterrows():
         news = news_cache.get(row['Symbol'], [])
+        
+        # Classify financing status
+        financing_status = classify_financing_status(news)
+        financing_status_storage[row['Symbol']] = financing_status
+        df.at[idx, 'Financing_Status'] = financing_status if financing_status else 'NONE'
+        
         cash_missing = row['cash'] == 10.0
         burn_missing = row['burn_source'] == 'default'
         insider = row.get('Insider_Buying_90d', False)
@@ -1299,7 +1500,8 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
             news,
             cash_missing,
             burn_missing,
-            insider
+            insider,
+            financing_status
         )
         
         df.at[idx, 'Dilution_Risk_Score'] = dil['score']
@@ -1343,13 +1545,32 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
         
         alpha_result = calculate_alpha_models(row, hist, benchmark)
         
-        # CRITICAL FIX: Add SMC score to alpha
+        # CRITICAL FIX: Add SMC score to alpha (update model structure)
         smc_score = row.get('SMC_Score', 50)
-        alpha_result['models']['M7_SMC'] = smc_score * 0.08
-        alpha_result['breakdown'][-2] = f"M7 SMC: {smc_score}/100 × 8% = {alpha_result['models']['M7_SMC']:.1f}"
+        if isinstance(alpha_result['models'].get('M7_SMC'), dict):
+            # Update model metadata structure
+            alpha_result['models']['M7_SMC']['raw_score_0_100'] = smc_score
+            alpha_result['models']['M7_SMC']['contribution_points'] = smc_score * 0.08
+            alpha_result['models']['M7_SMC']['explanation'] = f"SMC Bias: {row.get('SMC_Bias', 'Neutral')}, Score: {smc_score:.0f}/100"
+        else:
+            # Fallback: convert old format to new format
+            contribution = smc_score * 0.08
+            alpha_result['models']['M7_SMC'] = {
+                'name': 'Smart Money Concepts',
+                'inventor': 'ICT / Smart Money Concepts (2020s)',
+                'weight_percent': 8.0,
+                'raw_score_0_100': smc_score,
+                'contribution_points': contribution,
+                'explanation': f"SMC Bias: {row.get('SMC_Bias', 'Neutral')}, Score: {smc_score:.0f}/100"
+            }
+        
+        alpha_result['breakdown'][-2] = f"M7 SMC: {smc_score}/100 × 8% = {alpha_result['models']['M7_SMC']['contribution_points']:.1f}"
         
         # Recalculate total
-        alpha_result['alpha_score'] = sum(alpha_result['models'].values())
+        if isinstance(list(alpha_result['models'].values())[0], dict):
+            alpha_result['alpha_score'] = sum(m.get('contribution_points', 0) for m in alpha_result['models'].values())
+        else:
+            alpha_result['alpha_score'] = sum(alpha_result['models'].values())
         
         df.at[idx, 'Alpha_Score'] = alpha_result['alpha_score']
         
@@ -1440,7 +1661,9 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
     st.session_state.conf_breakdown_storage = conf_breakdown_storage
     st.session_state.dilution_factors_storage = dilution_factors_storage
     st.session_state.alpha_breakdown_storage = alpha_breakdown_storage
+    st.session_state.alpha_models_storage = alpha_models_storage
     st.session_state.sell_triggers_storage = sell_triggers_storage
+    st.session_state.financing_status_storage = financing_status_storage
     
     st.success("✅ World-class analysis complete!")
     st.rerun()
@@ -1451,10 +1674,12 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
 
 # Helper functions for ranking
 def add_ranking_columns(df):
-    """Add ranking columns"""
+    """Add ranking columns with explicit action priority"""
     ACTION_RANK = {
-        '🟢 STRONG BUY': 7, '🟢 BUY': 6, '🔵 ADD': 5, '🔵 ADD ⚠️': 5, '🔵 ACCUMULATE': 5,
-        '⚪ HOLD': 4, '🟡 TRIM': 3, '🔴 REDUCE': 2, '🔴 SELL': 1, '🚨 SELL NOW': 0
+        '🟢 STRONG BUY': 7, '🟢 BUY': 6, '🟢 BUY ⚠️': 6,
+        '🔵 ADD': 5, '🔵 ADD ⚠️': 5, '🔵 ACCUMULATE': 5,
+        '⚪ HOLD': 4, '🟡 TRIM': 3, 
+        '🔴 REDUCE': 2, '🔴 SELL': 1, '🚨 SELL NOW': 0
     }
     df['Action_Rank'] = df['Action'].map(ACTION_RANK).fillna(4)
     
@@ -1463,13 +1688,24 @@ def add_ranking_columns(df):
     return df
 
 def sort_dataframe(df, sort_mode):
-    """Sort dataframe"""
+    """Sort dataframe with explicit action priority, then Alpha_Score descending"""
+    ACTION_RANK = {
+        '🟢 STRONG BUY': 7, '🟢 BUY': 6, '🟢 BUY ⚠️': 6,
+        '🔵 ADD': 5, '🔵 ADD ⚠️': 5, '🔵 ACCUMULATE': 5,
+        '⚪ HOLD': 4, '🟡 TRIM': 3, 
+        '🔴 REDUCE': 2, '🔴 SELL': 1, '🚨 SELL NOW': 0
+    }
+    
+    if 'Action_Rank' not in df.columns:
+        df['Action_Rank'] = df['Action'].map(ACTION_RANK).fillna(4)
+    
     if sort_mode == "Sell risk first":
         return df.sort_values(['Sell_Risk_Score', 'Action_Rank'], ascending=[False, False])
     elif sort_mode == "Alpha first":
-        return df.sort_values(['Alpha_Score', 'Sell_Risk_Score'], ascending=[False, True])
+        return df.sort_values(['Alpha_Score', 'Action_Rank'], ascending=[False, False])
     else:
-        return df.sort_values(['Action_Rank', 'Alpha_Score', 'Tier_Rank'], ascending=[False, False, False])
+        # Default: Action priority (STRONG BUY > BUY > ADD > HOLD > TRIM > REDUCE > SELL > SELL NOW), then Alpha descending
+        return df.sort_values(['Action_Rank', 'Alpha_Score'], ascending=[False, False])
 
 def render_daily_summary(df, macro_regime, cash):
     """Render daily summary"""
@@ -1564,28 +1800,24 @@ def render_daily_summary(df, macro_regime, cash):
                 st.write(f"• {row['Symbol']}: Trim ${diff:,.0f}")
 
 if 'results' in st.session_state:
-    df = st.session_state.results
-    news_cache = st.session_state.news_cache
-    macro = st.session_state.macro_regime
+    # Guardrails: safely access session_state with defaults
+    df = st.session_state.get('results', pd.DataFrame())
+    news_cache = st.session_state.get('news_cache', {})
+    macro = st.session_state.get('macro_regime', {})
     
-    total_mv = df['Market_Value'].sum()
-    total_value = total_mv + st.session_state.cash
-    
-    # Display morning tape (simple version)
-    if 'gold_analysis' in st.session_state and 'silver_analysis' in st.session_state:
-        render_morning_tape_simple(
-            st.session_state.gold_analysis,
-            st.session_state.silver_analysis,
-            st.session_state.get('metal_regime', {})
-        )
+    # Guardrails: safely access values with defaults
+    total_mv = df['Market_Value'].sum() if not df.empty and 'Market_Value' in df.columns else 0
+    total_value = total_mv + st.session_state.get('cash', 0)
     
     # Daily summary
-    render_daily_summary(df, macro, st.session_state.cash)
+    render_daily_summary(df, macro, st.session_state.get('cash', 0))
     
     conf_breakdown_storage = st.session_state.get('conf_breakdown_storage', {})
     dilution_factors_storage = st.session_state.get('dilution_factors_storage', {})
     alpha_breakdown_storage = st.session_state.get('alpha_breakdown_storage', {})
+    alpha_models_storage = st.session_state.get('alpha_models_storage', {})
     sell_triggers_storage = st.session_state.get('sell_triggers_storage', {})
+    financing_status_storage = st.session_state.get('financing_status_storage', {})
     
     st.markdown("---")
     
@@ -1658,166 +1890,196 @@ if 'results' in st.session_state:
     st.markdown("---")
     st.header("📊 Detailed Position Analysis")
     
-    # Add ranking and sort
-    df = add_ranking_columns(df)
-    sort_mode = st.session_state.get('sort_mode', 'Action first (default)')
-    df_sorted = sort_dataframe(df, sort_mode)
-    
-    for _, row in df_sorted.iterrows():
-        # Card style
-        if 'BUY' in row['Action']:
-            st.success(f"### {row['Symbol']} - {row['Action']}")
-        elif 'SELL' in row['Action'] or 'REDUCE' in row['Action']:
-            st.error(f"### {row['Symbol']} - {row['Action']}")
-        else:
-            st.info(f"### {row['Symbol']} - {row['Action']}")
+    # Guardrails: check if df is empty or missing required columns
+    if df.empty or 'Action' not in df.columns:
+        st.info("No results available. Click 'RUN WORLD-CLASS ANALYSIS' to start.")
+    else:
+        # Add ranking and sort
+        df = add_ranking_columns(df)
+        sort_mode = st.session_state.get('sort_mode', 'Action first (default)')
+        df_sorted = sort_dataframe(df, sort_mode)
         
-        # Metrics
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
-        c1.metric("Alpha", f"{row['Alpha_Score']:.0f}/100")
-        c2.metric("Sell Risk", f"{row['Sell_Risk_Score']:.0f}/100")
-        c3.metric("Current", f"{row['Pct_Portfolio']:.1f}%")
-        c4.metric("→ Rec", f"{row['Recommended_Pct']:.1f}%")
-        c5.metric("Max", f"{row['Max_Allowed_Pct']:.1f}%")
-        c6.metric("Conf", f"{row['Confidence']:.0f}%")
-        
-        # Badges (FIXED INDENTATION)
-        sleeve_badge = f"badge-{row['Sleeve'].lower()}"
-        liq_badge = f"badge-{row['Liq_tier_code'].lower()}"
-        
-        badge_html = f'<span class="{sleeve_badge}">{row["Sleeve"]}</span> '
-        badge_html += f'<span class="{liq_badge}">{row["Liq_tier_code"]}: {row["Liq_tier_name"]}</span> '
-        badge_html += f'<span class="badge-tactical">Conf: {row["Data_Confidence"]:.0f}%</span> '
-        badge_html += f'<span class="badge-tactical">Dil: {row["Dilution_Risk_Score"]:.0f}/100</span> '
-        
-        if row.get('Insider_Buying_90d', False):
-            badge_html += '<span class="badge-insider">INSIDER BUY</span> '
-        
-        if row.get('Discovery_Exception', False):
-            badge_html += '<span class="badge-discovery">DISCOVERY ⚠️</span> '
-        
-        # SMC badge
-        smc_bias = row.get('SMC_Bias', 'Neutral')
-        smc_state = row.get('SMC_State', 'NEUTRAL')
-        if smc_bias == 'Bullish' or smc_state == 'BULLISH':
-            badge_html += '<span class="badge-l3">SMC: ↑</span> '
-        elif smc_bias == 'Bearish' or smc_state == 'BEARISH':
-            badge_html += '<span class="badge-l1">SMC: ↓</span> '
-        else:
-            badge_html += '<span class="badge-l2">SMC: ~</span> '
-        
-        # News quality
-        ticker_news = news_cache.get(row['Symbol'], [])
-        news_quality, news_badge = calculate_news_quality(ticker_news)
-        badge_html += f'<span class="{news_badge}">News: {news_quality}</span> '
-        
-        st.markdown(badge_html, unsafe_allow_html=True)
-        
-        # Key info
-        st.caption(f"**{row['stage']}** • {row['metal']} • {row['country']} • Runway: {row['Runway']:.1f}mo • Days to Exit: {row['Liq_days_to_exit']:.1f}d")
-        
-        # Reasoning
-        if row['Reasoning']:
-            for reason in row['Reasoning'][:3]:
-                st.write(f"• {reason}")
-        
-        # Warnings
-        if row['Warnings']:
-            for warn in row['Warnings']:
-                st.warning(warn)
-        
-        # Detailed breakdown
-        with st.expander(f"🔍 Complete Analysis for {row['Symbol']}", expanded=False):
-            
-            # Gates
-            st.subheader("🚦 Gate Status")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("**✅ Passed:**")
-                for gate in row['Gates_Passed']:
-                    st.markdown(f'<span class="gate-pass">{gate}</span>', unsafe_allow_html=True)
-            
-            with col2:
-                st.markdown("**❌ Failed/Warnings:**")
-                for gate in row['Gates_Failed']:
-                    st.markdown(f'<span class="gate-fail">{gate}</span>', unsafe_allow_html=True)
-            
-            # Sell triggers
-            sell_triggers = sell_triggers_storage.get(row['Symbol'], [])
-            if sell_triggers:
-                st.markdown("---")
-                st.subheader("🔴 Active Sell Triggers")
-                for trigger in sell_triggers:
-                    st.error(trigger)
-            
-            # Alpha breakdown
-            st.markdown("---")
-            st.subheader("🎯 7-Model Alpha Breakdown")
-            
-            alpha_breakdown = alpha_breakdown_storage.get(row['Symbol'], [])
-            if alpha_breakdown:
-                for model_desc in alpha_breakdown:
-                    st.write(f"• {model_desc}")
-            
-            # Data confidence
-            st.markdown("---")
-            st.subheader("📊 Data Confidence Details")
-            st.write(f"**Score:** {row['Data_Confidence']}/100 ({row['Conf_Verdict']})")
-            
-            conf_breakdown = conf_breakdown_storage.get(row['Symbol'], [])
-            if conf_breakdown:
-                for detail in conf_breakdown:
-                    st.caption(detail)
-            
-            # Dilution risk
-            st.markdown("---")
-            st.subheader("💀 Dilution Risk Factors")
-            st.write(f"**Score:** {row['Dilution_Risk_Score']}/100 ({row['Dilution_Verdict']})")
-            
-            dilution_factors = dilution_factors_storage.get(row['Symbol'], [])
-            if dilution_factors:
-                for factor in dilution_factors:
-                    st.caption(factor)
-            
-            # SMC Analysis
-            st.markdown("---")
-            st.subheader("📈 Smart Money Concepts (SMC)")
-            st.write(f"**Bias:** {row['SMC_Bias']} | **Score:** {row['SMC_Score']:.0f}/100")
-            st.write(f"**Summary:** {row['SMC_Summary']}")
-            
-            smc_signals = st.session_state.get('smc_signals_storage', {}).get(row['Symbol'], [])
-            if smc_signals:
-                st.write(f"**Signals:** {', '.join(smc_signals)}")
-            
-            # News
-            st.markdown("---")
-            st.subheader("📰 Recent News (Last 90 days)")
-            
-            ticker_news = news_cache.get(row['Symbol'], [])
-            if ticker_news:
-                for item in ticker_news[:10]:
-                    tags = item.get('tag_string', '')
-                    date_str = item.get('date_str', 'Unknown')
-                    st.markdown(f"**{item['title']}** {tags}")
-                    st.caption(f"{item['publisher']} • {date_str}")
-                    st.markdown("")
+        for _, row in df_sorted.iterrows():
+            # Card style
+            if 'BUY' in row['Action']:
+                st.success(f"### {row['Symbol']} - {row['Action']}")
+            elif 'SELL' in row['Action'] or 'REDUCE' in row['Action']:
+                st.error(f"### {row['Symbol']} - {row['Action']}")
             else:
-                st.info("No ticker news - showing sector news")
-                sector_news = get_sector_news_fallback()
-                for item in sector_news[:5]:
-                    st.markdown(f"**{item['title']}**")
-                    st.caption(item.get('publisher', 'Market'))
+                st.info(f"### {row['Symbol']} - {row['Action']}")
+            
+            # Metrics
+            c1, c2, c3, c4, c5, c6 = st.columns(6)
+            c1.metric("Alpha", f"{row['Alpha_Score']:.0f}/100")
+            c2.metric("Sell Risk", f"{row['Sell_Risk_Score']:.0f}/100")
+            c3.metric("Current", f"{row['Pct_Portfolio']:.1f}%")
+            c4.metric("→ Rec", f"{row['Recommended_Pct']:.1f}%")
+            c5.metric("Max", f"{row['Max_Allowed_Pct']:.1f}%")
+            c6.metric("Conf", f"{row['Confidence']:.0f}%")
+            
+            # Badges (FIXED INDENTATION)
+            sleeve_badge = f"badge-{row['Sleeve'].lower()}"
+            liq_badge = f"badge-{row['Liq_tier_code'].lower()}"
+            
+            badge_html = f'<span class="{sleeve_badge}">{row["Sleeve"]}</span> '
+            badge_html += f'<span class="{liq_badge}">{row["Liq_tier_code"]}: {row["Liq_tier_name"]}</span> '
+            badge_html += f'<span class="badge-tactical">Conf: {row["Data_Confidence"]:.0f}%</span> '
+            badge_html += f'<span class="badge-tactical">Dil: {row["Dilution_Risk_Score"]:.0f}/100</span> '
+            
+            if row.get('Insider_Buying_90d', False):
+                badge_html += '<span class="badge-insider">INSIDER BUY</span> '
+            
+            if row.get('Discovery_Exception', False):
+                badge_html += '<span class="badge-discovery">DISCOVERY ⚠️</span> '
+            
+            # Financing status badge
+            financing_status = financing_status_storage.get(row['Symbol'], 'NONE')
+            if financing_status == 'PP_CLOSED':
+                badge_html += '<span class="badge-l3">💰 PP CLOSED</span> '
+            elif financing_status == 'ATM':
+                badge_html += '<span class="badge-l1">⚠️ ATM</span> '
+            elif financing_status == 'SHELF':
+                badge_html += '<span class="badge-l1">⚠️ SHELF</span> '
+            elif financing_status == 'ANNOUNCED':
+                badge_html += '<span class="badge-l2">⚠️ FINANCING</span> '
+            
+            # SMC badge
+            smc_bias = row.get('SMC_Bias', 'Neutral')
+            smc_state = row.get('SMC_State', 'NEUTRAL')
+            if smc_bias == 'Bullish' or smc_state == 'BULLISH':
+                badge_html += '<span class="badge-l3">SMC: ↑</span> '
+            elif smc_bias == 'Bearish' or smc_state == 'BEARISH':
+                badge_html += '<span class="badge-l1">SMC: ↓</span> '
+            else:
+                badge_html += '<span class="badge-l2">SMC: ~</span> '
+            
+            # News quality
+            ticker_news = news_cache.get(row['Symbol'], [])
+            news_quality, news_badge = calculate_news_quality(ticker_news)
+            badge_html += f'<span class="{news_badge}">News: {news_quality}</span> '
+            
+            st.markdown(badge_html, unsafe_allow_html=True)
+            
+            # Key info
+            st.caption(f"**{row['stage']}** • {row['metal']} • {row['country']} • Runway: {row['Runway']:.1f}mo • Days to Exit: {row['Liq_days_to_exit']:.1f}d")
+            
+            # Reasoning
+            if row['Reasoning']:
+                for reason in row['Reasoning'][:3]:
+                    st.write(f"• {reason}")
+            
+            # Warnings
+            if row['Warnings']:
+                for warn in row['Warnings']:
+                    st.warning(warn)
+            
+            # Detailed breakdown
+            with st.expander(f"🔍 Complete Analysis for {row['Symbol']}", expanded=False):
+                
+                # Gates
+                st.subheader("🚦 Gate Status")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**✅ Passed:**")
+                    for gate in row['Gates_Passed']:
+                        st.markdown(f'<span class="gate-pass">{gate}</span>', unsafe_allow_html=True)
+                
+                with col2:
+                    st.markdown("**❌ Failed/Warnings:**")
+                    for gate in row['Gates_Failed']:
+                        st.markdown(f'<span class="gate-fail">{gate}</span>', unsafe_allow_html=True)
+                
+                # Sell triggers
+                sell_triggers = sell_triggers_storage.get(row['Symbol'], [])
+                if sell_triggers:
+                    st.markdown("---")
+                    st.subheader("🔴 Active Sell Triggers")
+                    for trigger in sell_triggers:
+                        st.error(trigger)
+                
+                # Alpha breakdown with Model Transparency
+                st.markdown("---")
+                st.subheader("🎯 8-Model Alpha Breakdown (Transparent)")
+                
+                alpha_models = alpha_models_storage.get(row['Symbol'], {})
+                if alpha_models and isinstance(list(alpha_models.values())[0] if alpha_models else None, dict):
+                    # Display as expandable sections with full transparency
+                    for model_id, model_info in sorted(alpha_models.items()):
+                        if isinstance(model_info, dict):
+                            with st.expander(f"ℹ️ {model_info.get('name', model_id)} ({model_info.get('weight_percent', 0):.0f}% weight)"):
+                                st.caption(f"**Inventor/Source:** {model_info.get('inventor', 'Unknown')}")
+                                st.caption(f"**Raw Score:** {model_info.get('raw_score_0_100', 0):.0f}/100")
+                                st.caption(f"**Contribution:** {model_info.get('contribution_points', 0):.1f} points")
+                                st.caption(f"**Explanation:** {model_info.get('explanation', 'N/A')}")
+                    
+                    # Total verification
+                    calculated_total = sum(m.get('contribution_points', 0) for m in alpha_models.values())
+                    st.caption(f"**Total Alpha Score:** {calculated_total:.1f} (verification: {row.get('Alpha_Score', 0):.1f})")
+                
+                # Fallback to breakdown list
+                alpha_breakdown = alpha_breakdown_storage.get(row['Symbol'], [])
+                if alpha_breakdown:
+                    st.caption("**Breakdown:**")
+                    for model_desc in alpha_breakdown:
+                        st.write(f"• {model_desc}")
+                
+                # Data confidence
+                st.markdown("---")
+                st.subheader("📊 Data Confidence Details")
+                st.write(f"**Score:** {row['Data_Confidence']}/100 ({row['Conf_Verdict']})")
+                
+                conf_breakdown = conf_breakdown_storage.get(row['Symbol'], [])
+                if conf_breakdown:
+                    for detail in conf_breakdown:
+                        st.caption(detail)
+                
+                # Dilution risk
+                st.markdown("---")
+                st.subheader("💀 Dilution Risk Factors")
+                st.write(f"**Score:** {row['Dilution_Risk_Score']}/100 ({row['Dilution_Verdict']})")
+                
+                dilution_factors = dilution_factors_storage.get(row['Symbol'], [])
+                if dilution_factors:
+                    for factor in dilution_factors:
+                        st.caption(factor)
+                
+                # SMC Analysis
+                st.markdown("---")
+                st.subheader("📈 Smart Money Concepts (SMC)")
+                st.write(f"**Bias:** {row['SMC_Bias']} | **Score:** {row['SMC_Score']:.0f}/100")
+                st.write(f"**Summary:** {row['SMC_Summary']}")
+                
+                smc_signals = st.session_state.get('smc_signals_storage', {}).get(row['Symbol'], [])
+                if smc_signals:
+                    st.write(f"**Signals:** {', '.join(smc_signals)}")
+                
+                # News
+                st.markdown("---")
+                st.subheader("📰 Recent News (Last 90 days)")
+                
+                ticker_news = news_cache.get(row['Symbol'], [])
+                if ticker_news:
+                    for item in ticker_news[:10]:
+                        tags = item.get('tag_string', '')
+                        date_str = item.get('date_str', 'Unknown')
+                        st.markdown(f"**{item['title']}** {tags}")
+                        st.caption(f"{item['publisher']} • {date_str}")
+                        st.markdown("")
+                else:
+                    st.info("No ticker news - showing sector news")
+                    sector_news = get_sector_news_fallback()
+                    for item in sector_news[:5]:
+                        st.markdown(f"**{item['title']}**")
+                        st.caption(item.get('publisher', 'Market'))
         
-        st.markdown("---")
-    
-    # Export
-    st.download_button(
-        "📥 Download Complete Analysis",
-        df.to_csv(index=False),
-        f"alpha_miner_analysis_{datetime.date.today()}.csv",
-        use_container_width=True
-    )
+        # Export
+        st.download_button(
+            "📥 Download Complete Analysis",
+            df.to_csv(index=False),
+            f"alpha_miner_analysis_{datetime.date.today()}.csv",
+            use_container_width=True
+        )
 
 st.caption(f"💎 Alpha Miner Pro {VERSION} • Survival > Alpha • Sell-In-Time")
