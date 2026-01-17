@@ -1752,6 +1752,107 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
 # DISPLAY RESULTS
 # ============================================================================
 
+# ============================================================================
+# MODEL TRANSPARENCY RENDERER
+# ============================================================================
+
+def render_model_transparency(alpha_models: dict, alpha_score_expected: float | int = None):
+    """
+    Render model transparency UI using st.tabs (safe inside expanders)
+    Shows compact table first, then detailed tabs per model
+    """
+    if not alpha_models or not isinstance(list(alpha_models.values())[0] if alpha_models else None, dict):
+        return
+    
+    # Sort models by contribution DESC (most impactful first)
+    sorted_models = sorted(
+        alpha_models.items(),
+        key=lambda x: x[1].get('contribution_points', 0) if isinstance(x[1], dict) else 0,
+        reverse=True
+    )
+    
+    if len(sorted_models) == 0:
+        return
+    
+    # Weight sanity check
+    total_weight = sum(m.get('weight_percent', 0) for _, m in sorted_models if isinstance(m, dict))
+    if abs(total_weight - 100.0) > 0.5:  # Allow small float error
+        st.warning(f"⚠️ **Weighting Sanity Check:** Total weight is {total_weight:.1f}% (expected ~100%)")
+    
+    # Compact table showing all models
+    st.markdown("**Model Summary Table:**")
+    table_data = []
+    for model_id, model_info in sorted_models:
+        if isinstance(model_info, dict):
+            table_data.append({
+                'Model': model_info.get('name', model_id),
+                'Inventor': model_info.get('inventor', 'Unknown'),
+                'Weight %': f"{model_info.get('weight_percent', 0):.1f}",
+                'Raw Score': f"{model_info.get('raw_score_0_100', 0):.0f}/100",
+                'Contribution': f"{model_info.get('contribution_points', 0):.1f}"
+            })
+    
+    if table_data:
+        summary_df = pd.DataFrame(table_data)
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+    
+    st.markdown("---")
+    st.markdown("**Detailed Model Breakdown:**")
+    
+    # Create tabs for each model (sorted by contribution DESC)
+    tab_labels = []
+    for model_id, model_info in sorted_models:
+        if isinstance(model_info, dict):
+            name = model_info.get('name', model_id)
+            weight = model_info.get('weight_percent', 0)
+            contribution = model_info.get('contribution_points', 0)
+            tab_labels.append(f"{name} ({weight:.0f}% • {contribution:.1f} pts)")
+    
+    if len(tab_labels) > 0:
+        tabs = st.tabs(tab_labels)
+        
+        for idx, (model_id, model_info) in enumerate(sorted_models):
+            if isinstance(model_info, dict) and idx < len(tabs):
+                with tabs[idx]:
+                    # Model header with popover
+                    col1, col2 = st.columns([1, 20])
+                    with col1:
+                        with st.popover("ℹ️"):
+                            st.write("**Model Details**")
+                            st.write(f"**Model ID:** {model_id}")
+                            st.write(f"**Name:** {model_info.get('name', 'Unknown')}")
+                            st.write(f"**Inventor/Source:** {model_info.get('inventor', 'Unknown')}")
+                            st.write(f"**Weight:** {model_info.get('weight_percent', 0):.0f}%")
+                    
+                    with col2:
+                        st.write(f"**{model_info.get('name', model_id)}**")
+                        st.caption(f"Inventor/Source: {model_info.get('inventor', 'Unknown')}")
+                    
+                    # Key metrics in columns
+                    col_a, col_b, col_c = st.columns(3)
+                    with col_a:
+                        st.metric("Raw Score", f"{model_info.get('raw_score_0_100', 0):.0f}/100")
+                    with col_b:
+                        st.metric("Weight", f"{model_info.get('weight_percent', 0):.0f}%")
+                    with col_c:
+                        st.metric("Contribution", f"{model_info.get('contribution_points', 0):.1f} pts")
+                    
+                    st.markdown("---")
+                    
+                    # Detailed breakdown
+                    st.write(f"**Model ID:** `{model_id}`")
+                    st.write(f"**Inventor/Source:** {model_info.get('inventor', 'Unknown')}")
+                    st.write(f"**Explanation:** {model_info.get('explanation', 'N/A')}")
+    
+    # Score verification
+    calculated_total = sum(m.get('contribution_points', 0) for m in alpha_models.values())
+    if alpha_score_expected is not None:
+        diff = abs(calculated_total - alpha_score_expected)
+        if diff < 0.1:
+            st.success(f"✅ **Score Verification:** {calculated_total:.1f} points (matches Alpha_Score: {alpha_score_expected:.1f})")
+        else:
+            st.info(f"📊 **Score Verification:** Sum of contributions = {calculated_total:.1f} pts | Alpha_Score = {alpha_score_expected:.1f} | Diff = {diff:.1f}")
+
 # Helper functions for ranking
 def add_ranking_columns(df):
     """Add ranking columns with explicit action priority (handles ⚠️ actions)"""
@@ -1997,6 +2098,21 @@ if 'results' in st.session_state:
         df_sorted = sort_dataframe(df, sort_mode)
         
         for _, row in df_sorted.iterrows():
+            # Quick Read summary
+            alpha = row.get('Alpha_Score', 0)
+            smc_bias = row.get('SMC_Bias', 'Neutral')
+            smc_event = row.get('SMC_Event', 'NONE')
+            smc_str = f"SMC {smc_bias}"
+            if smc_event != 'NONE':
+                smc_str += f" {smc_event}"
+            sell_risk = row.get('Sell_Risk_Score', 0)
+            dil_verdict = row.get('Dilution_Verdict', 'LOW')
+            liq_tier = row.get('Liq_tier_code', 'L0')
+            days_exit = row.get('Liq_days_to_exit', 99)
+            
+            quick_read = f"**Quick Read:** Alpha {alpha:.0f} ({smc_str}), SellRisk {sell_risk:.0f}, Dilution {dil_verdict}, Liquidity {liq_tier} ({days_exit:.1f}d exit)"
+            st.caption(quick_read)
+            
             # Card style with liquidity warning for BUY/ADD actions
             action_str = str(row['Action'])
             action_display = action_str
@@ -2113,63 +2229,16 @@ if 'results' in st.session_state:
                 st.subheader("🎯 8-Model Alpha Breakdown (Transparent)")
                 
                 alpha_models = alpha_models_storage.get(row['Symbol'], {})
-                if alpha_models and isinstance(list(alpha_models.values())[0] if alpha_models else None, dict):
-                    # Display models using tabs (no nested expanders - Streamlit-safe)
-                    sorted_models = sorted(alpha_models.items())
-                    if len(sorted_models) > 0:
-                        # Create tabs for each model with concise labels
-                        tab_labels = []
-                        for model_id, model_info in sorted_models:
-                            if isinstance(model_info, dict):
-                                name = model_info.get('name', model_id)
-                                weight = model_info.get('weight_percent', 0)
-                                tab_labels.append(f"{name} ({weight:.0f}%)")
-                        
-                        if len(tab_labels) > 0:
-                            tabs = st.tabs(tab_labels)
-                            
-                            for idx, (model_id, model_info) in enumerate(sorted_models):
-                                if isinstance(model_info, dict) and idx < len(tabs):
-                                    with tabs[idx]:
-                                        # Model info with popover for additional details
-                                        col1, col2 = st.columns([1, 20])
-                                        with col1:
-                                            with st.popover("ℹ️"):
-                                                st.write("**Model Details**")
-                                                st.write(f"**Model ID:** {model_id}")
-                                                st.write(f"**Name:** {model_info.get('name', 'Unknown')}")
-                                                st.write(f"**Inventor/Source:** {model_info.get('inventor', 'Unknown')}")
-                                                st.write(f"**Weight:** {model_info.get('weight_percent', 0):.0f}%")
-                                        
-                                        with col2:
-                                            st.write(f"**{model_info.get('name', model_id)}**")
-                                        
-                                        # Key metrics
-                                        col_a, col_b, col_c = st.columns(3)
-                                        with col_a:
-                                            st.metric("Raw Score", f"{model_info.get('raw_score_0_100', 0):.0f}/100")
-                                        with col_b:
-                                            st.metric("Weight", f"{model_info.get('weight_percent', 0):.0f}%")
-                                        with col_c:
-                                            st.metric("Contribution", f"{model_info.get('contribution_points', 0):.1f} pts")
-                                        
-                                        st.markdown("---")
-                                        
-                                        # Detailed breakdown
-                                        st.write(f"**Model ID:** `{model_id}`")
-                                        st.write(f"**Inventor/Source:** {model_info.get('inventor', 'Unknown')}")
-                                        st.write(f"**Explanation:** {model_info.get('explanation', 'N/A')}")
-                    
-                    # Total verification
-                    calculated_total = sum(m.get('contribution_points', 0) for m in alpha_models.values())
-                    st.info(f"**Total Alpha Score:** {calculated_total:.1f} points | **Verification:** {row.get('Alpha_Score', 0):.1f} (diff: {abs(calculated_total - row.get('Alpha_Score', 0)):.1f})")
-                
-                # Fallback to breakdown list
-                alpha_breakdown = alpha_breakdown_storage.get(row['Symbol'], [])
-                if alpha_breakdown:
-                    st.caption("**Breakdown:**")
-                    for model_desc in alpha_breakdown:
-                        st.write(f"• {model_desc}")
+                if alpha_models:
+                    # Use helper function (no nested expanders)
+                    render_model_transparency(alpha_models, row.get('Alpha_Score'))
+                else:
+                    # Fallback to breakdown list
+                    alpha_breakdown = alpha_breakdown_storage.get(row['Symbol'], [])
+                    if alpha_breakdown:
+                        st.caption("**Breakdown:**")
+                        for model_desc in alpha_breakdown:
+                            st.write(f"• {model_desc}")
                 
                 # Data confidence
                 st.markdown("---")
