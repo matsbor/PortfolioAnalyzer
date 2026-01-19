@@ -147,6 +147,295 @@ def save_cache(data):
 if 'fund_cache' not in st.session_state:
     st.session_state.fund_cache = load_cache()
 
+
+# =========================================================================
+# GOVERNANCE: VALIDATION, STRICT MODE, EVIDENCE PACKS, REPLAY MODE
+# =========================================================================
+
+EVIDENCE_DIR = Path.home() / '.alpha_miner_evidence_packs'
+EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+
+RISK_PROFILES = {
+    "Aggressive": {
+        "max_pos_pct": {"L3": 12.0, "L2": 9.0, "L1": 6.0, "L0": 1.0},
+        "min_data_confidence_for_buys": 55,
+        "strict_downgrade_confidence": 50,
+        "sell_risk_floor": 15,
+    },
+    "Balanced": {
+        "max_pos_pct": {"L3": 10.0, "L2": 7.5, "L1": 5.0, "L0": 1.0},
+        "min_data_confidence_for_buys": 65,
+        "strict_downgrade_confidence": 60,
+        "sell_risk_floor": 20,
+    },
+    "Defensive": {
+        "max_pos_pct": {"L3": 7.5, "L2": 6.0, "L1": 4.0, "L0": 1.0},
+        "min_data_confidence_for_buys": 75,
+        "strict_downgrade_confidence": 70,
+        "sell_risk_floor": 25,
+    },
+}
+
+
+def get_risk_profile_preset(name: str) -> dict:
+    """Return risk profile preset dict with safe default."""
+    preset = RISK_PROFILES.get(name) or RISK_PROFILES.get("Balanced")
+    # copy so callers can modify without mutating global
+    out = dict(preset)
+    out["name"] = name if name in RISK_PROFILES else "Balanced"
+    return out
+
+
+def _now_iso():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def validate_data_invariants(df: pd.DataFrame, arg2=None, arg3=None):
+    """
+    Backwards compatible:
+      - validate_data_invariants(df, news_cache)
+      - validate_data_invariants(df, alpha_models_storage, news_cache)
+
+    Returns: dict with keys: ok(bool), errors(list[str]), warnings(list[str]), per_symbol(dict)
+    """
+
+    # If only 2 args were provided: (df, news_cache)
+    if arg3 is None:
+        alpha_models_storage = {}
+        news_cache = arg2 or {}
+    else:
+        # 3 args: (df, alpha_models_storage, news_cache)
+        alpha_models_storage = arg2 or {}
+        news_cache = arg3 or {}
+
+    errors, warnings = [], []
+    per_symbol = {}
+
+    # Portfolio-level checks
+    required_cols = [
+        'Symbol','Price','Market_Value','Pct_Portfolio','Alpha_Score','Sell_Risk_Score',
+        'Data_Confidence','Dilution_Risk_Score','Liq_tier_code'
+    ]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        errors.append(f"Missing required columns: {missing}")
+
+    # Alpha weights sum check (models that exist)
+    for sym, models in (alpha_models_storage or {}).items():
+        try:
+            total_w = 0.0
+            for _, v in models.items():
+                # stored as weighted contributions already
+                total_w += float(v)
+            if not (0 <= total_w <= 100):
+                warnings.append(f"{sym}: alpha contribution sum out of range: {total_w:.1f}")
+        except Exception:
+            warnings.append(f"{sym}: could not validate alpha model contributions")
+
+    # Row-level checks
+    for _, r in df.iterrows():
+        sym = str(r.get('Symbol','')).strip()
+        pe = []
+        pw = []
+        try:
+            price = float(r.get('Price', 0) or 0)
+            if price <= 0:
+                pw.append('price<=0')
+            mv = float(r.get('Market_Value', 0) or 0)
+            if mv < 0:
+                pe.append('market_value<0')
+            pct = float(r.get('Pct_Portfolio', 0) or 0)
+            if pct < 0 or pct > 100:
+                pe.append('pct_portfolio_out_of_range')
+            burn = float(r.get('burn', 1) or 1)
+            cash = float(r.get('cash', 0) or 0)
+            if burn <= 0:
+                pw.append('burn<=0 (runway invalid)')
+            if cash < 0:
+                pe.append('cash<0')
+
+            for col in ['Sell_Risk_Score','Dilution_Risk_Score','Data_Confidence','SMC_Score']:
+                if col in df.columns:
+                    v = float(r.get(col, 0) or 0)
+                    if v < 0 or v > 100:
+                        pw.append(f"{col}_out_of_range")
+
+            # News timestamps sanity
+            items = (news_cache or {}).get(sym, [])
+            if items:
+                bad_ts = 0
+                for it in items:
+                    ts = it.get('timestamp', 0) or 0
+                    if ts and (ts < 946684800 or ts > 1893456000):
+                        bad_ts += 1
+                if bad_ts:
+                    pw.append(f"{bad_ts} news items have invalid timestamps")
+        except Exception as e:
+            pw.append(f"row_validation_exception:{e}")
+
+        if pe or pw:
+            per_symbol[sym] = {'errors': pe, 'warnings': pw}
+
+    ok = (len(errors) == 0)
+    return {'ok': ok, 'errors': errors, 'warnings': warnings, 'per_symbol': per_symbol}
+
+
+def enforce_strict_mode(df: pd.DataFrame, validation_results: dict, strict_mode: bool, risk_profile: str):
+    """Downgrade actions when inputs/data quality aren't strong enough."""
+    if not strict_mode:
+        return df, []
+
+    profile = RISK_PROFILES.get(risk_profile, RISK_PROFILES['Balanced'])
+    min_conf = profile['min_data_confidence_for_buys']
+    downgrades = []
+
+    per_symbol = (validation_results or {}).get('per_symbol', {})
+
+    def _is_buy_action(a: str) -> bool:
+        a = (a or '').upper()
+        return ('BUY' in a) or ('ADD' in a) or ('ACCUMULATE' in a)
+
+    df2 = df.copy()
+    for i, r in df2.iterrows():
+        sym = r.get('Symbol','')
+        action = r.get('Action','')
+        conf = float(r.get('Data_Confidence', 0) or 0)
+        issues = per_symbol.get(sym, {})
+        has_errors = bool(issues.get('errors'))
+        has_warnings = bool(issues.get('warnings'))
+
+        if _is_buy_action(action) and (conf < min_conf or has_errors):
+            df2.at[i, 'Action'] = '⚪ HOLD'
+            df2.at[i, 'Confidence'] = min(float(r.get('Confidence', 60) or 60), profile['strict_downgrade_confidence'])
+            rs = list(r.get('Reasoning') or [])
+            rs = rs if isinstance(rs, list) else [str(rs)]
+            rs.insert(0, f"STRICT MODE: downgraded due to data confidence ({conf:.0f}) or validation errors")
+            df2.at[i, 'Reasoning'] = rs
+            downgrades.append(sym)
+        elif _is_buy_action(action) and has_warnings and conf < (min_conf + 10):
+            # soften but don't fully block
+            df2.at[i, 'Action'] = '🔵 ADD ⚠️'
+            rs = list(r.get('Reasoning') or [])
+            rs = rs if isinstance(rs, list) else [str(rs)]
+            rs.insert(0, "STRICT MODE: caution due to validation warnings")
+            df2.at[i, 'Reasoning'] = rs
+
+    return df2, downgrades
+
+
+def create_evidence_pack(
+    df: pd.DataFrame,
+    portfolio_input: pd.DataFrame,
+    cash: float,
+    macro_regime: dict,
+    news_cache: dict,
+    alpha_breakdown_storage: dict,
+    sell_triggers_storage: dict,
+    dilution_factors_storage: dict,
+    conf_breakdown_storage: dict,
+    meta: dict | None = None,
+):
+    """Create a replayable, self-contained evidence pack (zero network calls needed to render)."""
+    pack = {
+        'evidence_pack_id': f"ep_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        'created_at_utc': _now_iso(),
+        'app_version': VERSION,
+        'app_version_date': VERSION_DATE,
+        'meta': meta or {},
+        'inputs': {
+            'portfolio': portfolio_input.to_dict(orient='records'),
+            'cash': float(cash),
+        },
+        'macro_regime': macro_regime or {},
+        'results': df.to_dict(orient='records'),
+        'caches': {
+            'news_cache': news_cache or {},
+            'alpha_breakdown_storage': alpha_breakdown_storage or {},
+            'sell_triggers_storage': sell_triggers_storage or {},
+            'dilution_factors_storage': dilution_factors_storage or {},
+            'conf_breakdown_storage': conf_breakdown_storage or {},
+        },
+    }
+    return pack
+
+
+def save_evidence_pack(pack: dict) -> Path:
+    ep_id = pack.get('evidence_pack_id', f"ep_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    path = EVIDENCE_DIR / f"{ep_id}.json"
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(pack, f, indent=2)
+    return path
+
+
+def list_evidence_packs():
+    return sorted(EVIDENCE_DIR.glob('ep_*.json'), key=lambda x: x.stat().st_mtime, reverse=True)
+
+
+def load_evidence_pack(path: Path) -> dict:
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def compute_run_diff(prev_df: pd.DataFrame, curr_df: pd.DataFrame):
+    """Return a simple diff table keyed by Symbol."""
+    if prev_df is None or prev_df.empty:
+        return pd.DataFrame()
+    a = prev_df.set_index('Symbol')
+    b = curr_df.set_index('Symbol')
+    common = a.index.intersection(b.index)
+    rows = []
+    for sym in common:
+        ra, rb = a.loc[sym], b.loc[sym]
+        def g(x, k, d=0):
+            try:
+                return x.get(k, d)
+            except Exception:
+                return d
+        if g(ra,'Action','') != g(rb,'Action','') or abs(float(g(ra,'Alpha_Score',0))-float(g(rb,'Alpha_Score',0)))>=5 or abs(float(g(ra,'Sell_Risk_Score',0))-float(g(rb,'Sell_Risk_Score',0)))>=10:
+            rows.append({
+                'Symbol': sym,
+                'Action_prev': g(ra,'Action',''),
+                'Action_now': g(rb,'Action',''),
+                'Alpha_prev': float(g(ra,'Alpha_Score',0) or 0),
+                'Alpha_now': float(g(rb,'Alpha_Score',0) or 0),
+                'Sell_prev': float(g(ra,'Sell_Risk_Score',0) or 0),
+                'Sell_now': float(g(rb,'Sell_Risk_Score',0) or 0),
+                'RecPct_prev': float(g(ra,'Recommended_Pct',0) or 0),
+                'RecPct_now': float(g(rb,'Recommended_Pct',0) or 0),
+            })
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out['Alpha_Δ'] = out['Alpha_now'] - out['Alpha_prev']
+        out['Sell_Δ'] = out['Sell_now'] - out['Sell_prev']
+        out['RecPct_Δ'] = out['RecPct_now'] - out['RecPct_prev']
+    return out
+
+
+def compute_rebalance_table(df: pd.DataFrame, total_value: float):
+    rows = []
+    for _, r in df.iterrows():
+        sym = r.get('Symbol')
+        cur = float(r.get('Pct_Portfolio',0) or 0)
+        rec = float(r.get('Recommended_Pct',0) or 0)
+        delta = rec - cur
+        dollars = (delta/100.0) * float(total_value)
+        if abs(delta) < 0.25:
+            continue
+        side = 'BUY' if delta > 0 else 'SELL'
+        rows.append({
+            'Symbol': sym,
+            'Side': side,
+            'Current_%': round(cur,2),
+            'Target_%': round(rec,2),
+            'Δ_%': round(delta,2),
+            'Δ_$': round(dollars,0),
+            'Action': r.get('Action',''),
+        })
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values(['Side','Δ_$'], ascending=[True, False])
+    return out
+
 # ============================================================================
 # A) LIQUIDITY ENGINE
 # ============================================================================
@@ -1085,6 +1374,50 @@ with st.sidebar:
             st.caption(f"• {feature}")
     st.markdown("---")
     
+
+
+    st.markdown("### 🧭 Risk Governance")
+    st.session_state.strict_mode = st.toggle("STRICT MODE (downgrade on low confidence)", value=bool(st.session_state.get('strict_mode', True)))
+
+    # Risk profile presets
+    risk_profile = st.selectbox(
+        "Risk Profile",
+        options=["Balanced", "Aggressive", "Defensive"],
+        index=["Balanced", "Aggressive", "Defensive"].index(st.session_state.get('risk_profile', 'Balanced'))
+    )
+    st.session_state.risk_profile = risk_profile
+
+    preset = get_risk_profile_preset(risk_profile)
+    with st.expander("Show preset parameters"):
+        st.table(pd.DataFrame([preset]))
+
+    st.markdown("### ♻️ Replay Mode (Offline)")
+    replay_mode = st.toggle("Replay from Evidence Pack (no network calls)", value=bool(st.session_state.get('replay_mode', False)))
+    st.session_state.replay_mode = replay_mode
+
+    if replay_mode:
+        uploaded = st.file_uploader("Upload evidence pack JSON", type=["json"], key="evidence_pack_uploader")
+        if uploaded is not None:
+            try:
+                pack = json.loads(uploaded.getvalue().decode('utf-8'))
+                st.session_state.replay_pack = pack
+                st.success(f"Loaded evidence pack: {pack.get('evidence_pack_id','(no id)')}")
+            except Exception as e:
+                st.session_state.replay_pack = None
+                st.error(f"Could not load JSON: {e}")
+
+        existing = list_saved_evidence_packs()
+        if existing:
+            pick = st.selectbox("Or load saved pack", options=[p['file'] for p in existing], index=0)
+            if st.button("Load selected pack"):
+                st.session_state.replay_pack = load_evidence_pack(pick)
+                st.success(f"Loaded: {pick}")
+
+        if st.session_state.get('replay_pack'):
+            st.caption("OFFLINE_MODE is ON. Analysis will render from the evidence pack.")
+
+    st.markdown("---")
+
     st.header("📊 Portfolio")
     port_size = st.number_input("Portfolio Size", value=PORTFOLIO_SIZE, step=10000)
     
@@ -1433,7 +1766,38 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
         df[k.title()] = [d[k] for d in decisions]
     
     progress.progress(100, text="✅ Complete!")
-    
+
+    # ------------------------------------------------------------------------
+    # Governance: validate, apply strict mode, build evidence pack
+    # ------------------------------------------------------------------------
+    # Invariants check (used by STRICT MODE & Trust Panel). Use the real model storage.
+    validation = validate_data_invariants(df, alpha_models_storage, news_cache)
+    st.session_state.validation = validation
+
+    if st.session_state.get('strict_mode', False):
+        preset = get_risk_profile_preset(st.session_state.get('risk_profile', 'Balanced'))
+        df, strict_downgrades = enforce_strict_mode(df, validation, st.session_state.get('strict_mode', False), st.session_state.get('risk_profile','Balanced'))
+
+    # Save evidence pack for replay/debugging
+    try:
+        pack = create_evidence_pack(
+            portfolio_input=st.session_state.portfolio,
+            cash=float(st.session_state.cash),
+            results_df=df,
+            news_cache=news_cache,
+            macro_regime=macro_regime,
+            meta={
+                'version': VERSION,
+                'version_date': VERSION_DATE,
+                'risk_profile': st.session_state.get('risk_profile', 'Balanced'),
+                'strict_mode': bool(st.session_state.get('strict_mode', False))
+            }
+        )
+        st.session_state.evidence_pack = pack
+        save_evidence_pack(pack)
+    except Exception:
+        st.session_state.evidence_pack = None
+
     st.session_state.results = df
     st.session_state.news_cache = news_cache
     st.session_state.macro_regime = macro_regime
@@ -1570,6 +1934,73 @@ if 'results' in st.session_state:
     
     total_mv = df['Market_Value'].sum()
     total_value = total_mv + st.session_state.cash
+
+    # Validation summary
+    val = st.session_state.get('validation_report', {})
+    if val:
+        issues = val.get('issues', [])
+        if issues:
+            with st.expander(f"🧪 Data Validation Issues ({len(issues)})", expanded=False):
+                for msg in issues[:100]:
+                    st.warning(msg)
+        else:
+            st.caption("🧪 Data validation: no issues detected")
+
+    # Evidence pack / diff / rebalance
+    with st.expander("🧾 Evidence Pack, Diff, and Rebalance", expanded=False):
+        pack = st.session_state.get('evidence_pack')
+        if pack:
+            st.caption(f"Pack id: {pack.get('pack_id')} • created: {pack.get('created_at_local')}")
+
+            # Diff vs previous pack (if any)
+            prev_id = st.session_state.get('prev_pack_id_for_diff')
+            if prev_id:
+                prev = load_evidence_pack(prev_id)
+            else:
+                prev = None
+
+            if prev and prev.get('results'):
+                import pandas as _pd
+                prev_df = _pd.DataFrame(prev['results'])
+                cur_df = df.copy()
+                key = 'Symbol'
+                cols = ['Action','Alpha_Score','Sell_Risk_Score','Recommended_Pct','Pct_Portfolio']
+                merged = prev_df[[key]+cols].merge(cur_df[[key]+cols], on=key, how='outer', suffixes=('_prev','_cur'))
+                changes = []
+                for _,r in merged.iterrows():
+                    sym = r.get(key)
+                    for c in cols:
+                        a=r.get(f'{c}_prev')
+                        b=r.get(f'{c}_cur')
+                        if (a!=b) and not (_pd.isna(a) and _pd.isna(b)):
+                            changes.append({'Symbol':sym,'Field':c,'Prev':a,'Now':b})
+                if changes:
+                    st.write("**What changed vs previous run**")
+                    st.dataframe(_pd.DataFrame(changes).head(200), use_container_width=True, hide_index=True)
+                else:
+                    st.caption("No diffs vs previous run")
+            else:
+                st.caption("Run at least twice (or select a previous evidence pack) to see diffs.")
+
+            # Rebalance table
+            import pandas as _pd
+            cur = df[['Symbol','Pct_Portfolio','Recommended_Pct','Market_Value']].copy()
+            cur['Delta_Pct'] = cur['Recommended_Pct'] - cur['Pct_Portfolio']
+            cur['Target_$'] = total_value * (cur['Recommended_Pct'] / 100.0)
+            cur['Delta_$'] = cur['Target_$'] - cur['Market_Value']
+            cur['Trade'] = cur['Delta_$'].apply(lambda x: 'BUY' if x>0 else ('SELL' if x<0 else 'HOLD'))
+            st.write("**Suggested rebalance (vs total portfolio value)**")
+            st.dataframe(cur.sort_values('Delta_$', ascending=False), use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "Download evidence pack (JSON)",
+                data=json.dumps(pack, indent=2),
+                file_name=f"alpha_evidence_{pack.get('pack_id')}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+        else:
+            st.caption("No evidence pack in session yet. Run analysis to generate one.")
     
     # Display morning tape (simple version)
     if 'gold_analysis' in st.session_state and 'silver_analysis' in st.session_state:
