@@ -1,9 +1,8 @@
-.DS_Store
 __pycache__/
-*.pyc
-*.backup.py
-*_OLD.py
-*_backup.py
-*_prefinal_backup.py
-*.txt
-*.csv
+.pytest_cache/
+.DS_Store
+*.bak
+*.backup
+*.log
+.alpha_miner_cache.json
+alpha_miner_institutional_v2_BACKUP.py
