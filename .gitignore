@@ -5,4 +5,3 @@ __pycache__/
 *.backup
 *.log
 .alpha_miner_cache.json
-alpha_miner_institutional_v2_BACKUP.py
