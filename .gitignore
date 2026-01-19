@@ -4,4 +4,9 @@ __pycache__/
 *.bak
 *.backup
 *.log
-.alpha_miner_cache.json
+*.txt
+*.csv
+alpha_miner_*_OLD.py
+alpha_miner_*_backup.py
+alpha_miner_*_broken_backup.py
+alpha_miner_*_prefinal_backup.py
