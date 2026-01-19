@@ -1,0 +1,206 @@
+# ALPHA MINER PRO - SIMPLE STARTUP GUIDE
+# How to check you have everything and start the app
+
+## STEP 1: CHECK YOU HAVE ALL FILES
+
+Run this in your terminal:
+
+```bash
+cd ~/PortfolioAnalyzer
+ls -la *.py | grep -E "(institutional|alpha_miner)"
+```
+
+### You Should See:
+
+```
+alpha_miner_enhanced.py                    (original base file)
+institutional_enhancements.py              (v1 features)
+institutional_enhancements_v2.py           (v2 features - metal cycle)
+integrate_institutional_v2.py              (integration script)
+```
+
+**AND MAYBE:**
+```
+alpha_miner_institutional_v2.py            (integrated version - if you already ran integration)
+```
+
+---
+
+## STEP 2: SIMPLE METHOD (Use the startup script)
+
+```bash
+cd ~/PortfolioAnalyzer
+bash startup_check.sh
+```
+
+This will:
+- ✅ Check all files are present
+- ✅ Run integration if needed
+- ✅ Ask if you want to start the app
+- ✅ Start it for you
+
+---
+
+## STEP 3: MANUAL METHOD (If you prefer)
+
+### If you DON'T have `alpha_miner_institutional_v2.py`:
+
+```bash
+cd ~/PortfolioAnalyzer
+
+# Run integration
+python3 integrate_institutional_v2.py
+
+# Then start
+streamlit run alpha_miner_institutional_v2.py
+```
+
+### If you ALREADY have `alpha_miner_institutional_v2.py`:
+
+```bash
+cd ~/PortfolioAnalyzer
+streamlit run alpha_miner_institutional_v2.py
+```
+
+---
+
+## STEP 4: IF FILES ARE MISSING
+
+You need to download from Claude (scroll up to find them):
+
+### **Files to Download:**
+1. `institutional_enhancements.py`
+2. `institutional_enhancements_v2.py`  
+3. `integrate_institutional_v2.py`
+4. `startup_check.sh` (optional, but helpful)
+
+### **Where to Save Them:**
+```
+~/PortfolioAnalyzer/
+```
+
+### **After Downloading:**
+```bash
+cd ~/PortfolioAnalyzer
+ls -la institutional*.py
+
+# You should see all 3 files
+```
+
+Then go back to STEP 2 or STEP 3.
+
+---
+
+## WHAT HAPPENS WHEN YOU START:
+
+### **First Time (with integration):**
+```
+🔍 Checking files...
+✅ All files found
+
+⚙️  Running integration...
+📝 Patch 1: Adding imports...
+📝 Patch 2: Adding metal cycle analysis...
+📝 Patch 3: Adding morning tape...
+[... more patches ...]
+✅ Integration complete!
+
+Created: alpha_miner_institutional_v2.py
+
+🚀 Ready to run!
+```
+
+### **Then Streamlit starts:**
+```
+Collecting usage statistics...
+You can now view your Streamlit app in your browser.
+
+Local URL: http://localhost:8501
+Network URL: http://192.168.1.X:8501
+```
+
+### **In the app, you'll see:**
+1. **Morning Tape** at the very top
+   - Gold & Silver predictions
+   - Metal regime status
+   - Today's action plan
+
+2. **Portfolio Health Check**
+   - Overall health score
+   - Concentration warnings
+
+3. **Individual stock analysis** with:
+   - New badges (SMC ✓, DISCOUNT/PREMIUM, HYPE ⚠️, PP CLOSED ✓)
+   - Metal-aware position sizing
+   - Stricter discovery exceptions
+
+---
+
+## TROUBLESHOOTING
+
+### Error: "institutional_enhancements.py not found"
+```bash
+# Check files in directory
+cd ~/PortfolioAnalyzer
+ls -la institutional*.py
+
+# If missing, download from Claude
+# Make sure you're saving to the RIGHT directory
+```
+
+### Error: "No module named 'institutional_enhancements'"
+```bash
+# Make sure files are in SAME directory as alpha_miner_enhanced.py
+cd ~/PortfolioAnalyzer
+ls -la
+
+# Both should be in same folder
+```
+
+### Integration script doesn't run
+```bash
+# Try with python3 explicitly
+python3 integrate_institutional_v2.py
+
+# Or check Python version
+python3 --version
+# Should be 3.8 or higher
+```
+
+### App starts but looks the same
+```bash
+# You might be running the OLD file
+# Make sure you're running:
+streamlit run alpha_miner_institutional_v2.py
+
+# NOT:
+streamlit run alpha_miner_enhanced.py
+```
+
+---
+
+## QUICK CHECK: IS IT WORKING?
+
+When the app starts, you should see:
+
+1. **At the very top:** "📊 MORNING TAPE" section
+2. **Gold price and predictions** (e.g., "Gold: $2,045")
+3. **Silver price and predictions**
+4. **Regime status** (e.g., "METALS_BULLISH")
+
+If you see these → IT'S WORKING! ✅
+
+If you DON'T see these → You're running the old file.
+
+---
+
+## THE ABSOLUTE SIMPLEST WAY:
+
+```bash
+cd ~/PortfolioAnalyzer
+bash startup_check.sh
+```
+
+Then answer "y" when it asks to run.
+
+That's it! 🚀

@@ -334,7 +334,6 @@ def create_evidence_pack(
     dilution_factors_storage: dict,
     conf_breakdown_storage: dict,
     meta: dict | None = None,
-    tape_gate: dict | None = None,
 ):
     """Create a replayable, self-contained evidence pack (zero network calls needed to render)."""
     pack = {
@@ -346,12 +345,8 @@ def create_evidence_pack(
         'inputs': {
             'portfolio': portfolio_input.to_dict(orient='records'),
             'cash': float(cash),
-            'freeze_time': meta.get('freeze_time', False) if meta else False,
-            'disable_sector_fallback_news': meta.get('disable_sector_fallback_news', False) if meta else False,
-            'disable_inferred_fundamentals': meta.get('disable_inferred_fundamentals', False) if meta else False,
         },
         'macro_regime': macro_regime or {},
-        'tape_gate': tape_gate or {},
         'results': df.to_dict(orient='records'),
         'caches': {
             'news_cache': news_cache or {},
@@ -979,76 +974,6 @@ def calculate_sell_risk(row, hist_data, ma50, ma200, news_items, macro_regime):
 # H) MACRO REGIME
 # ============================================================================
 
-def calculate_tape_gate(macro_regime, gold_analysis=None, silver_analysis=None):
-    """
-    Calculate tape/regime gate decision helper.
-    Returns: {regime_label, new_buys_allowed, throttle, reasons[]}
-    """
-    gate = {
-        'regime_label': 'NEUTRAL',
-        'new_buys_allowed': True,
-        'throttle': 1.0,
-        'reasons': []
-    }
-    
-    # Use macro_regime inputs
-    dxy = macro_regime.get('dxy', 0)
-    vix = macro_regime.get('vix', 0)
-    allow_new_buys = macro_regime.get('allow_new_buys', True)
-    throttle_factor = macro_regime.get('throttle_factor', 1.0)
-    regime = macro_regime.get('regime', 'NEUTRAL')
-    
-    # DXY trend
-    dxy_ma = macro_regime.get('dxy_ma', dxy) if 'dxy_ma' in macro_regime else dxy
-    if dxy > 0 and dxy_ma > 0:
-        if dxy > dxy_ma * 1.05:
-            gate['reasons'].append('DXY: Strong (bearish for gold)')
-            gate['throttle'] *= 0.8
-        elif dxy < dxy_ma * 0.95:
-            gate['reasons'].append('DXY: Weak (bullish for gold)')
-        else:
-            gate['reasons'].append('DXY: Neutral')
-    else:
-        gate['reasons'].append('DXY: Unknown')
-    
-    # VIX regime
-    if vix > 0:
-        if vix > 25:
-            gate['regime_label'] = 'DEFENSIVE'
-            gate['new_buys_allowed'] = False
-            gate['throttle'] = 0.5
-            gate['reasons'].append(f'VIX: {vix:.1f} (defensive)')
-        elif vix < 15:
-            gate['regime_label'] = 'RISK-ON'
-            gate['reasons'].append(f'VIX: {vix:.1f} (risk-on)')
-        else:
-            gate['reasons'].append(f'VIX: {vix:.1f} (neutral)')
-    else:
-        gate['reasons'].append('VIX: Unknown')
-    
-    # Metal outlook (if available)
-    if gold_analysis and silver_analysis:
-        gold_bias = gold_analysis.get('bias_short', 'NEUTRAL')
-        silver_bias = silver_analysis.get('bias_short', 'NEUTRAL')
-        if 'BEARISH' in str(gold_bias) or 'BEARISH' in str(silver_bias):
-            gate['throttle'] *= 0.9
-            gate['reasons'].append('Metals: Bearish')
-        elif 'BULLISH' in str(gold_bias) or 'BULLISH' in str(silver_bias):
-            gate['reasons'].append('Metals: Bullish')
-        else:
-            gate['reasons'].append('Metals: Neutral')
-    else:
-        gate['reasons'].append('Metals: Unknown')
-    
-    # Override with macro_regime settings
-    gate['new_buys_allowed'] = allow_new_buys
-    gate['throttle'] = min(gate['throttle'], throttle_factor)
-    if regime == 'DEFENSIVE':
-        gate['regime_label'] = 'DEFENSIVE'
-        gate['new_buys_allowed'] = False
-    
-    return gate
-
 def calculate_macro_regime():
     """Calculate macro regime"""
     regime = {
@@ -1116,166 +1041,6 @@ def calculate_macro_regime():
     return regime
 
 # ============================================================================
-# I) FINANCING OVERHANG CALCULATION
-# ============================================================================
-
-def calculate_financing_overhang(news_items, ticker, runway_months):
-    """
-    Calculate financing overhang score (0-100).
-    Integrates with analyze_news_intelligence if v3 available, otherwise lightweight fallback.
-    
-    Returns: dict with 'score' (0-100) and 'reasons' (list of 2 short strings)
-    """
-    result = {
-        'score': 0.0,
-        'reasons': []
-    }
-    
-    if not news_items:
-        result['reasons'] = ['No news available']
-        return result
-    
-    # Try v3 integration first
-    if INSTITUTIONAL_V3_AVAILABLE:
-        try:
-            news_intel = analyze_news_intelligence(news_items, ticker)
-            status = news_intel.get('financing_status')
-            fin_type = news_intel.get('financing_type')
-            impact = news_intel.get('financing_impact', 0)
-            
-            # Find most recent financing event days_ago from news items
-            days_ago = None
-            for item in news_items:
-                ts = item.get('timestamp', 0)
-                if ts > 0:
-                    try:
-                        if ts > 1e12:
-                            ts = ts / 1000
-                        news_date = datetime.datetime.fromtimestamp(ts)
-                        days = (datetime.datetime.now() - news_date).days
-                        if days_ago is None or days < days_ago:
-                            days_ago = days
-                    except:
-                        pass
-            
-            if status == 'CLOSED':
-                if days_ago is not None and days_ago <= 7:
-                    # PP_CLOSED <=7d: overhang drops materially
-                    result['score'] = max(20, 40 + impact)
-                    result['reasons'] = [f'Financing closed {days_ago}d ago', 'Runway extended']
-                elif days_ago is not None and days_ago <= 30:
-                    result['score'] = max(20, 35 + impact)
-                    result['reasons'] = [f'Financing closed {days_ago}d ago', 'Recent close']
-                else:
-                    result['score'] = max(0, 30 + impact)
-                    result['reasons'] = ['Financing closed', 'Older event']
-            elif status == 'ANNOUNCED' or status == 'PRICED':
-                # ANNOUNCED not closed: 60-85
-                if fin_type == 'ATM':
-                    result['score'] = min(95, 85 + (impact if impact > 0 else 10))
-                    result['reasons'] = ['Active ATM', 'Ongoing dilution risk']
-                elif fin_type == 'SHELF':
-                    result['score'] = min(95, 80 + (impact if impact > 0 else 10))
-                    result['reasons'] = ['Shelf filed', 'Dilution imminent']
-                else:
-                    recency_factor = max(0, 30 - (days_ago or 90)) / 30.0
-                    result['score'] = 60 + (25 * recency_factor)
-                    result['reasons'] = ['Financing announced', 'Not yet closed']
-            elif status == 'NONE':
-                result['score'] = 0.0
-                result['reasons'] = ['No financing events']
-            else:
-                # Unknown status
-                result['score'] = 10.0
-                result['reasons'] = ['Unknown financing status']
-            
-            return result
-        except Exception as e:
-            # Fall through to lightweight fallback
-            pass
-    
-    # Lightweight fallback: keyword matching
-    financing_keywords = {
-        'shelf': ['shelf', 'prospectus', 'registration statement'],
-        'atm': ['atm', 'at-the-market', 'at the market'],
-        'closed': ['closes', 'closed', 'completes', 'completed', 'closing of'],
-        'announced': ['announces', 'proposes', 'intends to', 'plans to', 'seeks']
-    }
-    
-    most_recent_event = None
-    most_recent_days = None
-    
-    for item in news_items:
-        title_lower = (item.get('title', '') or '').lower()
-        ts = item.get('timestamp', 0)
-        
-        # Check if financing-related
-        is_financing = any(word in title_lower for word in 
-                          ['financing', 'placement', 'offering', 'capital raise', 'bought deal'])
-        if not is_financing:
-            continue
-        
-        # Determine stage and type
-        stage = None
-        fin_type = None
-        
-        if any(word in title_lower for word in financing_keywords['closed']):
-            stage = 'CLOSED'
-        elif any(word in title_lower for word in financing_keywords['announced']):
-            stage = 'ANNOUNCED'
-        
-        if any(word in title_lower for word in financing_keywords['shelf']):
-            fin_type = 'SHELF'
-        elif any(word in title_lower for word in financing_keywords['atm']):
-            fin_type = 'ATM'
-        
-        if stage:
-            # Calculate days ago
-            days_ago = None
-            if ts > 0:
-                try:
-                    if ts > 1e12:
-                        ts = ts / 1000
-                    news_date = datetime.datetime.fromtimestamp(ts)
-                    days_ago = (datetime.datetime.now() - news_date).days
-                except:
-                    pass
-            
-            if most_recent_days is None or (days_ago is not None and days_ago < most_recent_days):
-                most_recent_event = {'stage': stage, 'type': fin_type or 'PP', 'days_ago': days_ago}
-                most_recent_days = days_ago
-    
-    # Score based on most recent event
-    if most_recent_event:
-        stage = most_recent_event['stage']
-        fin_type = most_recent_event['type']
-        days_ago = most_recent_event.get('days_ago')
-        
-        if stage == 'CLOSED':
-            if days_ago is not None and days_ago <= 7:
-                result['score'] = 30.0
-                result['reasons'] = [f'Financing closed {days_ago}d ago', 'Runway extended']
-            else:
-                result['score'] = 20.0
-                result['reasons'] = ['Financing closed', 'Older event']
-        elif stage == 'ANNOUNCED':
-            if fin_type == 'ATM':
-                result['score'] = 85.0
-                result['reasons'] = ['Active ATM', 'Ongoing dilution']
-            elif fin_type == 'SHELF':
-                result['score'] = 80.0
-                result['reasons'] = ['Shelf filed', 'Dilution imminent']
-            else:
-                recency_factor = max(0, 30 - (days_ago or 90)) / 30.0 if days_ago is not None else 0.5
-                result['score'] = 60.0 + (25.0 * recency_factor)
-                result['reasons'] = ['Financing announced', 'Not yet closed']
-    else:
-        result['score'] = 0.0
-        result['reasons'] = ['No financing events detected']
-    
-    return result
-
-# ============================================================================
 # I) DISCOVERY EXCEPTION
 # ============================================================================
 
@@ -1323,7 +1088,7 @@ def check_discovery_exception(row, liq_metrics, alpha_score, data_confidence,
 # ============================================================================
 
 def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk, 
-                             alpha_score, macro_regime, discovery, tape_gate=None):
+                             alpha_score, macro_regime, discovery):
     """
     Final decision arbitration
     """
@@ -1343,36 +1108,6 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
     conf_score = data_conf['score']
     dil_score = dilution['score']
     sell_score = sell_risk['score']
-    
-    # Tape gate enforcement (if provided)
-    if tape_gate:
-        if not tape_gate.get('new_buys_allowed', True):
-            # Check if this is a buy action
-            current_pct = row.get('Pct_Portfolio', 0)
-            recommended_pct = row.get('Recommended_Pct', current_pct)
-            is_buy_action = recommended_pct > current_pct
-            
-            if is_buy_action:
-                decision['gates_failed'].append("🛑 Tape gate: New buys not allowed")
-                # Downgrade to HOLD or REDUCE based on strict mode
-                strict_mode = st.session_state.get('strict_mode', False)
-                if strict_mode and sell_score >= 30:
-                    decision['action'] = '🔴 REDUCE'
-                    decision['recommended_pct'] = current_pct * 0.5
-                else:
-                    decision['action'] = '⚪ HOLD'
-                    decision['recommended_pct'] = current_pct
-                decision['warnings'].append("Tape gate blocked new buy")
-                return decision
-        
-        # Apply throttle to positive deltas
-        throttle = tape_gate.get('throttle', 1.0)
-        if throttle < 1.0:
-            current_pct = row.get('Pct_Portfolio', 0)
-            if decision['recommended_pct'] > current_pct:
-                delta = decision['recommended_pct'] - current_pct
-                decision['recommended_pct'] = current_pct + (delta * throttle)
-                decision['warnings'].append(f"Tape throttle: {throttle:.2f}x applied")
     
     # Hard gates
     if not macro_regime.get('allow_new_buys', True):
@@ -1671,50 +1406,16 @@ with st.sidebar:
                 st.session_state.replay_pack = None
                 st.error(f"Could not load JSON: {e}")
 
-        existing = list_evidence_packs()
+        existing = list_saved_evidence_packs()
         if existing:
-            pick = st.selectbox("Or load saved pack", options=[str(p.name) for p in existing], index=0)
+            pick = st.selectbox("Or load saved pack", options=[p['file'] for p in existing], index=0)
             if st.button("Load selected pack"):
-                pack_path = EVIDENCE_DIR / pick
-                st.session_state.replay_pack = load_evidence_pack(pack_path)
+                st.session_state.replay_pack = load_evidence_pack(pick)
                 st.success(f"Loaded: {pick}")
 
         if st.session_state.get('replay_pack'):
             st.caption("OFFLINE_MODE is ON. Analysis will render from the evidence pack.")
 
-    st.markdown("---")
-    
-    st.markdown("### ⚙️ Determinism / Run Settings")
-    
-    # Initialize settings if not present
-    if 'freeze_time' not in st.session_state:
-        st.session_state.freeze_time = False
-    if 'disable_sector_fallback_news' not in st.session_state:
-        st.session_state.disable_sector_fallback_news = False
-    if 'disable_inferred_fundamentals' not in st.session_state:
-        st.session_state.disable_inferred_fundamentals = False
-    
-    freeze_time = st.toggle(
-        "Freeze time (use run timestamp as 'now')",
-        value=st.session_state.freeze_time,
-        help="Use the run timestamp for all time-based calculations instead of current time"
-    )
-    st.session_state.freeze_time = freeze_time
-    
-    disable_sector_news = st.toggle(
-        "Disable sector fallback news",
-        value=st.session_state.disable_sector_fallback_news,
-        help="If ticker news unavailable, do not fall back to sector news"
-    )
-    st.session_state.disable_sector_fallback_news = disable_sector_news
-    
-    disable_inferred = st.toggle(
-        "Disable inferred fundamentals (missing => Unknown)",
-        value=st.session_state.disable_inferred_fundamentals,
-        help="Do not infer missing fundamentals; mark as Unknown instead"
-    )
-    st.session_state.disable_inferred_fundamentals = disable_inferred
-    
     st.markdown("---")
 
     st.header("📊 Portfolio")
@@ -1760,52 +1461,6 @@ with st.sidebar:
 st.title("💎 ALPHA MINER PRO")
 st.caption("World-Class Capital Allocation Engine • Survival > Alpha • Sell-In-Time Focus")
 
-# Trust Panel (no expander)
-st.markdown("---")
-st.markdown("### 🔒 Trust Panel")
-trust_col1, trust_col2, trust_col3, trust_col4, trust_col5, trust_col6 = st.columns(6)
-
-run_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-trust_col1.caption(f"**Run:** {run_timestamp[:19]}Z")
-
-replay_status = "ON" if st.session_state.get('replay_mode', False) else "OFF"
-trust_col2.caption(f"**Replay:** {replay_status}")
-
-strict_status = "ON" if st.session_state.get('strict_mode', False) else "OFF"
-trust_col3.caption(f"**Strict Mode:** {strict_status}")
-
-risk_profile = st.session_state.get('risk_profile', 'Balanced')
-trust_col4.caption(f"**Risk Profile:** {risk_profile}")
-
-# Validation status
-validation = st.session_state.get('validation', {})
-if validation:
-    val_ok = validation.get('ok', False)
-    val_warnings = len(validation.get('warnings', []))
-    val_errors = len(validation.get('errors', []))
-    if val_ok and val_warnings == 0:
-        trust_col5.caption(f"**Validation:** ✅ PASS")
-    elif val_ok:
-        trust_col5.caption(f"**Validation:** ⚠️ PASS ({val_warnings} warnings)")
-    else:
-        trust_col5.caption(f"**Validation:** ❌ FAIL ({val_errors} errors)")
-else:
-    trust_col5.caption("**Validation:** ⏳ Pending")
-
-# Evidence pack ID
-evidence_pack = st.session_state.get('evidence_pack')
-if evidence_pack:
-    ep_id = evidence_pack.get('evidence_pack_id', 'Unknown')
-    trust_col6.caption(f"**Evidence Pack:** {ep_id[:20]}...")
-else:
-    trust_col6.caption("**Evidence Pack:** None")
-
-# Network calls indicator
-network_calls_made = "NO" if st.session_state.get('replay_mode', False) else "YES"
-st.caption(f"**Network calls made:** {network_calls_made}")
-
-st.markdown("---")
-
 # Get macro regime
 macro_regime = calculate_macro_regime()
 
@@ -1828,493 +1483,331 @@ elif macro_regime['regime'] == 'RISK-ON':
 else:
     st.info(f"📊 **NEUTRAL MODE** • {' | '.join(macro_regime['factors'])}")
 
-# Display Tape/Regime Gate
-if 'tape_gate' in st.session_state:
-    tape_gate = st.session_state.tape_gate
-    st.markdown("### 🚦 Tape / Regime Gate")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        dxy_reason = next((r for r in tape_gate['reasons'] if 'DXY' in r), 'DXY: Unknown')
-        st.caption(f"**{dxy_reason}**")
-    with col2:
-        vix_reason = next((r for r in tape_gate['reasons'] if 'VIX' in r), 'VIX: Unknown')
-        st.caption(f"**{vix_reason}**")
-    with col3:
-        buys_status = "✅ Yes" if tape_gate['new_buys_allowed'] else "❌ No"
-        st.caption(f"**New buys allowed? {buys_status}**")
-    if tape_gate['throttle'] < 1.0:
-        st.warning(f"⚠️ Throttle factor: {tape_gate['throttle']:.2f} (reduced position sizing)")
-
 # Analysis Button
 if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_width=True):
-    import traceback
+    progress = st.progress(0, text="Starting analysis...")
     
-    try:
-        progress = st.progress(0, text="Starting analysis...")
+    df = st.session_state.portfolio.copy()
+    
+    # Analyze metals FIRST
+    if INSTITUTIONAL_V2_AVAILABLE or INSTITUTIONAL_V3_AVAILABLE:
+        progress.progress(3, text="🪙 Analyzing Gold & Silver cycles...")
         
-        df = st.session_state.portfolio.copy()
+        if INSTITUTIONAL_V3_AVAILABLE:
+            gold_analysis = forecast_metal_direction("GC=F", "Gold")
+            silver_analysis = forecast_metal_direction("SI=F", "Silver")
+        elif INSTITUTIONAL_V2_AVAILABLE:
+            gold_analysis = analyze_metal_cycle("GC=F", "Gold")
+            silver_analysis = analyze_metal_cycle("SI=F", "Silver")
         
-        # Analyze metals FIRST
-        if INSTITUTIONAL_V2_AVAILABLE or INSTITUTIONAL_V3_AVAILABLE:
-            progress.progress(3, text="🪙 Analyzing Gold & Silver cycles...")
-            
-            if INSTITUTIONAL_V3_AVAILABLE:
-                gold_analysis = forecast_metal_direction("GC=F", "Gold")
-                silver_analysis = forecast_metal_direction("SI=F", "Silver")
-            elif INSTITUTIONAL_V2_AVAILABLE:
-                gold_analysis = analyze_metal_cycle("GC=F", "Gold")
-                silver_analysis = analyze_metal_cycle("SI=F", "Silver")
-            
-            if INSTITUTIONAL_V2_AVAILABLE:
-                metal_regime = calculate_metal_regime_impact(gold_analysis, silver_analysis)
-            else:
-                # Simple regime
-                metal_regime = {
-                    'regime': 'NEUTRAL',
-                    'throttle_adjustment': 1.0,
-                    'max_size_multiplier': 1.0,
-                    'discovery_hardness': 'NORMAL',
-                    'sell_sensitivity': 1.0
-                }
-            
-            st.session_state.gold_analysis = gold_analysis
-            st.session_state.silver_analysis = silver_analysis
-            st.session_state.metal_regime = metal_regime
+        if INSTITUTIONAL_V2_AVAILABLE:
+            metal_regime = calculate_metal_regime_impact(gold_analysis, silver_analysis)
         else:
-            st.session_state.metal_regime = {
+            # Simple regime
+            metal_regime = {
                 'regime': 'NEUTRAL',
                 'throttle_adjustment': 1.0,
                 'max_size_multiplier': 1.0,
                 'discovery_hardness': 'NORMAL',
                 'sell_sensitivity': 1.0
             }
-            gold_analysis = None
-            silver_analysis = None
         
-        # Calculate tape gate
-        tape_gate = calculate_tape_gate(
-            macro_regime,
-            st.session_state.get('gold_analysis') or gold_analysis,
-            st.session_state.get('silver_analysis') or silver_analysis
-        )
-        st.session_state.tape_gate = tape_gate
-        
-        # Check replay mode - skip network calls if enabled
-        replay_mode = st.session_state.get('replay_mode', False)
-        replay_pack = st.session_state.get('replay_pack')
-        
-        if replay_mode:
-            if not replay_pack:
-                st.error("⚠️ Replay mode enabled but no evidence pack loaded. Please load an evidence pack first.")
-                st.stop()
-            
-            # Load from evidence pack - zero network calls
-            st.info(f"🔄 REPLAY MODE — OFFLINE — DATA AS OF {replay_pack.get('created_at_utc', 'Unknown')}")
-            
-            # Load tape_gate from pack
-            if 'tape_gate' in replay_pack:
-                st.session_state.tape_gate = replay_pack['tape_gate']
-            
-            # Load results from pack (includes financing overhang)
-            if 'results' in replay_pack:
-                df = pd.DataFrame(replay_pack['results'])
-                news_cache = replay_pack.get('caches', {}).get('news_cache', {})
-                macro_regime = replay_pack.get('macro_regime', {})
-                alpha_breakdown_storage = replay_pack.get('caches', {}).get('alpha_breakdown_storage', {})
-                sell_triggers_storage = replay_pack.get('caches', {}).get('sell_triggers_storage', {})
-                dilution_factors_storage = replay_pack.get('caches', {}).get('dilution_factors_storage', {})
-                conf_breakdown_storage = replay_pack.get('caches', {}).get('conf_breakdown_storage', {})
-                
-                # Set session state
-                st.session_state.results = df
-                st.session_state.news_cache = news_cache
-                st.session_state.macro_regime = macro_regime
-                st.session_state.conf_breakdown_storage = conf_breakdown_storage
-                st.session_state.dilution_factors_storage = dilution_factors_storage
-                st.session_state.alpha_breakdown_storage = alpha_breakdown_storage
-                st.session_state.sell_triggers_storage = sell_triggers_storage
-                
-                progress.progress(100, text="✅ Replay complete!")
-                st.success("✅ World-class analysis complete!")
-                st.rerun()
-        
-        # Fetch price data (normal mode - network calls allowed)
-        progress.progress(10, text="📊 Fetching market data...")
-        
-        hist_cache = {}
-        for idx, row in df.iterrows():
-            if YFINANCE and not replay_mode:
-                try:
-                    hist = yf.Ticker(row['Symbol']).history(period="2y")
-                    if not hist.empty:
-                        hist_cache[row['Symbol']] = hist
-                        
-                        df.at[idx, 'Price'] = hist['Close'].iloc[-1]
-                        df.at[idx, 'Volume'] = hist['Volume'].mean()
-                        
-                        df.at[idx, 'Return_7d'] = ((hist['Close'].iloc[-1] - hist['Close'].iloc[-7]) / hist['Close'].iloc[-7] * 100) if len(hist) >= 7 else 0
-                        df.at[idx, 'Return_30d'] = ((hist['Close'].iloc[-1] - hist['Close'].iloc[-30]) / hist['Close'].iloc[-30] * 100) if len(hist) >= 30 else 0
-                        df.at[idx, 'Return_90d'] = ((hist['Close'].iloc[-1] - hist['Close'].iloc[-90]) / hist['Close'].iloc[-90] * 100) if len(hist) >= 90 else 0
-                        
-                        high_52w = hist['High'].tail(252).max() if len(hist) >= 252 else hist['High'].max()
-                        low_52w = hist['Low'].tail(252).min() if len(hist) >= 252 else hist['Low'].min()
-                        df.at[idx, 'Pct_From_52w_High'] = ((hist['Close'].iloc[-1] - high_52w) / high_52w * 100)
-                        df.at[idx, 'Pct_From_52w_Low'] = ((hist['Close'].iloc[-1] - low_52w) / low_52w * 100)
-                        
-                        df.at[idx, 'Volatility_60d'] = hist['Close'].pct_change().tail(60).std() * 100 if len(hist) >= 60 else 5
-                        
-                        df.at[idx, 'MA50'] = hist['Close'].tail(50).mean() if len(hist) >= 50 else 0
-                        df.at[idx, 'MA200'] = hist['Close'].tail(200).mean() if len(hist) >= 200 else 0
-                        
-                        if len(hist) >= 90:
-                            high_90d = hist['High'].tail(90).max()
-                            df.at[idx, 'Drawdown_90d'] = ((hist['Close'].iloc[-1] - high_90d) / high_90d * 100)
-                        else:
-                            df.at[idx, 'Drawdown_90d'] = 0
-                except:
-                    df.at[idx, 'Price'] = 0
-        
-        progress.progress(25, text="🔍 Fetching fundamentals...")
-        
-        info_storage = {}
-        inferred_storage = {}
-        
-        for idx, row in df.iterrows():
-            fund = get_fundamentals_with_tracking(row['Symbol'])
-            for k, v in fund.items():
-                if k not in ['info_dict', 'inferred_flags']:
-                    df.at[idx, k] = v
-            
-            info_storage[row['Symbol']] = fund['info_dict']
-            inferred_storage[row['Symbol']] = fund['inferred_flags']
-        
-        progress.progress(35, text="📰 Fetching news...")
-        
-        news_cache = {}
-        for idx, row in df.iterrows():
-            news = get_news_for_ticker(row['Symbol'])
-            news_cache[row['Symbol']] = news
-        
-        # Calculate position metrics
-        # IMPORTANT: Pct_Portfolio calculated vs total portfolio value (equity + cash)
-        df['Market_Value'] = df['Quantity'] * df['Price']
-        df['Gain_Loss'] = df['Market_Value'] - df['Cost_Basis']
-        df['Return_Pct'] = (df['Gain_Loss'] / df['Cost_Basis'] * 100)
-        total_mv = df['Market_Value'].sum()
-        total_value = total_mv + st.session_state.cash  # Total portfolio value
-        df['Pct_Portfolio'] = (df['Market_Value'] / total_value * 100)  # vs TOTAL VALUE
-        df['Runway'] = df['cash'] / df['burn']
-        
-        progress.progress(45, text="🚦 Liquidity analysis...")
-        
-        for idx, row in df.iterrows():
-            hist = hist_cache.get(row['Symbol'], pd.DataFrame())
-            liq = calculate_liquidity_metrics(row['Symbol'], hist, row['Price'], row['Market_Value'], port_size)
-            
-            for k, v in liq.items():
-                df.at[idx, f'Liq_{k}'] = v
-        
-        progress.progress(55, text="📊 Data confidence...")
-        
-        conf_breakdown_storage = {}
-        
-        for idx, row in df.iterrows():
-            fund_dict = {'burn_source': row['burn_source']}
-            info_dict = info_storage.get(row['Symbol'], {})
-            inferred = inferred_storage.get(row['Symbol'], {})
-            
-            conf = calculate_data_confidence(fund_dict, info_dict, inferred)
-            df.at[idx, 'Data_Confidence'] = conf['score']
-            df.at[idx, 'Conf_Verdict'] = conf['verdict']
-            
-            conf_breakdown_storage[row['Symbol']] = conf['breakdown']
-        
-        progress.progress(60, text="💀 Dilution risk...")
-        
-        dilution_factors_storage = {}
-        
-        for idx, row in df.iterrows():
-            news = news_cache.get(row['Symbol'], [])
-            cash_missing = row['cash'] == 10.0
-            burn_missing = row['burn_source'] == 'default'
-            insider = row.get('Insider_Buying_90d', False)
-            
-            dil = calculate_dilution_risk(
-                row['Runway'],
-                row['stage'],
-                abs(row.get('Drawdown_90d', 0)),
-                news,
-                cash_missing,
-                burn_missing,
-                insider
-            )
-            
-            df.at[idx, 'Dilution_Risk_Score'] = dil['score']
-            df.at[idx, 'Dilution_Verdict'] = dil['verdict']
-            
-            dilution_factors_storage[row['Symbol']] = dil['factors']
-        
-        # Calculate Financing Overhang
-        progress.progress(62, text="💰 Financing overhang analysis...")
-        
-        for idx, row in df.iterrows():
-            news = news_cache.get(row['Symbol'], [])
-            runway_months = row.get('Runway', 12.0)
-            
-            overhang = calculate_financing_overhang(news, row['Symbol'], runway_months)
-            
-            df.at[idx, 'Financing_Overhang_Score'] = overhang['score']
-            df.at[idx, 'Financing_Overhang_Reasons'] = overhang['reasons']
-        
-        # CRITICAL FIX: Calculate SMC BEFORE alpha scoring
-        progress.progress(65, text="📈 Calculating SMC signals...")
-        
-        smc_signals_storage = {}
-        
-        for idx, row in df.iterrows():
-            hist = hist_cache.get(row['Symbol'], pd.DataFrame())
-            
-            # Use v3 if available, otherwise v1
-            if INSTITUTIONAL_V3_AVAILABLE:
-                smc = calculate_smc_structure(hist, row['Symbol'])
-            else:
-                smc = calculate_smc_signals(hist, row['Price'])
-            
-            df.at[idx, 'SMC_Bias'] = smc.get('bias', smc.get('state', 'Neutral'))
-            df.at[idx, 'SMC_Score'] = smc.get('score', 50)
-            df.at[idx, 'SMC_Summary'] = smc.get('summary', smc.get('explanation', ''))
-            df.at[idx, 'SMC_State'] = smc.get('state', 'NEUTRAL')
-            df.at[idx, 'SMC_Event'] = smc.get('event', 'NONE')
-            
-            smc_signals_storage[row['Symbol']] = smc.get('signals', [])
-        
-        st.session_state.smc_signals_storage = smc_signals_storage
-        
-        # Now calculate alpha WITH SMC scores available
-        progress.progress(75, text="🎯 7-model alpha scoring...")
-        
-        alpha_models_storage = {}
-        alpha_breakdown_storage = {}
-        
-        for idx, row in df.iterrows():
-            hist = hist_cache.get(row['Symbol'], pd.DataFrame())
-            benchmark = get_benchmark_data(row.get('metal', 'Gold'))
-            
-            alpha_result = calculate_alpha_models(row, hist, benchmark)
-            
-            # CRITICAL FIX: Add SMC score to alpha
-            smc_score = row.get('SMC_Score', 50)
-            alpha_result['models']['M7_SMC'] = smc_score * 0.08
-            alpha_result['breakdown'][-2] = f"M7 SMC: {smc_score}/100 × 8% = {alpha_result['models']['M7_SMC']:.1f}"
-            
-            # Recalculate total
-            alpha_result['alpha_score'] = sum(alpha_result['models'].values())
-            
-            df.at[idx, 'Alpha_Score'] = alpha_result['alpha_score']
-            
-            alpha_models_storage[row['Symbol']] = alpha_result['models']
-            alpha_breakdown_storage[row['Symbol']] = alpha_result['breakdown']
-        
-        progress.progress(82, text="🔴 Sell-in-time analysis...")
-        
-        sell_triggers_storage = {}
-        
-        for idx, row in df.iterrows():
-            hist = hist_cache.get(row['Symbol'], pd.DataFrame())
-            news = news_cache.get(row['Symbol'], [])
-            
-            sell = calculate_sell_risk(row, hist, row.get('MA50', 0), row.get('MA200', 0), news, macro_regime)
-            
-            df.at[idx, 'Sell_Risk_Score'] = sell['score']
-            df.at[idx, 'Sell_Verdict'] = sell['verdict']
-            
-            # CRITICAL FIX: Store real triggers
-            sell_triggers_storage[row['Symbol']] = sell['all_triggers']
-        
-        progress.progress(90, text="✅ Final arbitration...")
-        
-        # Classify sleeves
-        for idx, row in df.iterrows():
-            liq_tier = row['Liq_tier_code']
-            daily_vol = row['Liq_dollar_vol_20d']
-            conf = row['Data_Confidence']
-            
-            if conf < 50:
-                df.at[idx, 'Sleeve'] = 'GAMBLING'
-            elif row['stage'] in ['Producer', 'Developer'] and daily_vol >= 200000 and conf >= 80:
-                df.at[idx, 'Sleeve'] = 'CORE'
-            else:
-                df.at[idx, 'Sleeve'] = 'TACTICAL'
-        
-        # Discovery exceptions
-        for idx, row in df.iterrows():
-            liq_metrics = {k.replace('Liq_', ''): v for k, v in row.items() if k.startswith('Liq_')}
-            
-            momentum_ok = row['Return_7d'] > 0 and row['Price'] > row.get('MA50', 0)
-            
-            exception = check_discovery_exception(
-                row, liq_metrics,
-                row['Alpha_Score'],
-                row['Data_Confidence'],
-                row['Dilution_Risk_Score'],
-                momentum_ok
-            )
-            
-            df.at[idx, 'Discovery_Exception'] = exception[0]
-            df.at[idx, 'Discovery_Reason'] = exception[1]
-        
-        # Final decisions
-        decisions = []
-        for _, row in df.iterrows():
-            liq_metrics = {k.replace('Liq_', ''): v for k, v in row.items() if k.startswith('Liq_')}
-            data_conf = {'score': row['Data_Confidence']}
-            dilution = {'score': row['Dilution_Risk_Score']}
-            
-            # CRITICAL FIX: Pass real triggers to arbitration
-            sell_triggers = sell_triggers_storage.get(row['Symbol'], [])
-            sell_risk = {
-                'score': row['Sell_Risk_Score'],
-                'hard_triggers': [t for t in sell_triggers if '💀' in t],
-                'soft_triggers': [t for t in sell_triggers if '⚠️' in t]
-            }
-            
-            discovery = (row['Discovery_Exception'], row['Discovery_Reason'])
-            
-            # Get tape gate from session state
-            tape_gate = st.session_state.get('tape_gate')
-            
-            decision = arbitrate_final_decision(
-                row, liq_metrics, data_conf, dilution, sell_risk,
-                row['Alpha_Score'], macro_regime, discovery, tape_gate
-            )
-            
-            decisions.append(decision)
-        
-        for k in ['action', 'confidence', 'recommended_pct', 'max_allowed_pct', 'reasoning', 
-                  'gates_passed', 'gates_failed', 'warnings']:
-            df[k.title()] = [d[k] for d in decisions]
-        
-        # Post-process: Strict mode + Financing Overhang enforcement
-        strict_mode = st.session_state.get('strict_mode', False)
-        if strict_mode:
-            for idx, row in df.iterrows():
-                overhang_score = row.get('Financing_Overhang_Score', 0)
-                action = row.get('Action', '')
-                is_buy = 'BUY' in action or 'ADD' in action or 'STRONG BUY' in action
-                
-                if is_buy and overhang_score >= 80:
-                    # Check if exception: PP_CLOSED <=7d AND runway >= 9 months
-                    reasons = row.get('Financing_Overhang_Reasons', [])
-                    has_recent_close = any('closed' in str(r).lower() and '7d' in str(r) for r in reasons)
-                    runway_months = row.get('Runway', 0)
+        st.session_state.gold_analysis = gold_analysis
+        st.session_state.silver_analysis = silver_analysis
+        st.session_state.metal_regime = metal_regime
+    else:
+        st.session_state.metal_regime = {
+            'regime': 'NEUTRAL',
+            'throttle_adjustment': 1.0,
+            'max_size_multiplier': 1.0,
+            'discovery_hardness': 'NORMAL',
+            'sell_sensitivity': 1.0
+        }
+    
+    # Fetch price data
+    progress.progress(10, text="📊 Fetching market data...")
+    
+    hist_cache = {}
+    for idx, row in df.iterrows():
+        if YFINANCE:
+            try:
+                hist = yf.Ticker(row['Symbol']).history(period="2y")
+                if not hist.empty:
+                    hist_cache[row['Symbol']] = hist
                     
-                    if not (has_recent_close and runway_months >= 9):
-                        # Block the buy
-                        df.at[idx, 'Action'] = '⚪ HOLD'
-                        current_warnings = row.get('Warnings', [])
-                        if isinstance(current_warnings, list):
-                            current_warnings.append("STRICT: Financing overhang ≥80 blocks buy")
-                        else:
-                            current_warnings = ["STRICT: Financing overhang ≥80 blocks buy"]
-                        df.at[idx, 'Warnings'] = current_warnings
-                        df.at[idx, 'Recommended_Pct'] = row.get('Pct_Portfolio', 0)
+                    df.at[idx, 'Price'] = hist['Close'].iloc[-1]
+                    df.at[idx, 'Volume'] = hist['Volume'].mean()
+                    
+                    df.at[idx, 'Return_7d'] = ((hist['Close'].iloc[-1] - hist['Close'].iloc[-7]) / hist['Close'].iloc[-7] * 100) if len(hist) >= 7 else 0
+                    df.at[idx, 'Return_30d'] = ((hist['Close'].iloc[-1] - hist['Close'].iloc[-30]) / hist['Close'].iloc[-30] * 100) if len(hist) >= 30 else 0
+                    df.at[idx, 'Return_90d'] = ((hist['Close'].iloc[-1] - hist['Close'].iloc[-90]) / hist['Close'].iloc[-90] * 100) if len(hist) >= 90 else 0
+                    
+                    high_52w = hist['High'].tail(252).max() if len(hist) >= 252 else hist['High'].max()
+                    low_52w = hist['Low'].tail(252).min() if len(hist) >= 252 else hist['Low'].min()
+                    df.at[idx, 'Pct_From_52w_High'] = ((hist['Close'].iloc[-1] - high_52w) / high_52w * 100)
+                    df.at[idx, 'Pct_From_52w_Low'] = ((hist['Close'].iloc[-1] - low_52w) / low_52w * 100)
+                    
+                    df.at[idx, 'Volatility_60d'] = hist['Close'].pct_change().tail(60).std() * 100 if len(hist) >= 60 else 5
+                    
+                    df.at[idx, 'MA50'] = hist['Close'].tail(50).mean() if len(hist) >= 50 else 0
+                    df.at[idx, 'MA200'] = hist['Close'].tail(200).mean() if len(hist) >= 200 else 0
+                    
+                    if len(hist) >= 90:
+                        high_90d = hist['High'].tail(90).max()
+                        df.at[idx, 'Drawdown_90d'] = ((hist['Close'].iloc[-1] - high_90d) / high_90d * 100)
+                    else:
+                        df.at[idx, 'Drawdown_90d'] = 0
+            except:
+                df.at[idx, 'Price'] = 0
+    
+    progress.progress(25, text="🔍 Fetching fundamentals...")
+    
+    info_storage = {}
+    inferred_storage = {}
+    
+    for idx, row in df.iterrows():
+        fund = get_fundamentals_with_tracking(row['Symbol'])
+        for k, v in fund.items():
+            if k not in ['info_dict', 'inferred_flags']:
+                df.at[idx, k] = v
         
-        progress.progress(100, text="✅ Complete!")
+        info_storage[row['Symbol']] = fund['info_dict']
+        inferred_storage[row['Symbol']] = fund['inferred_flags']
+    
+    progress.progress(35, text="📰 Fetching news...")
+    
+    news_cache = {}
+    for idx, row in df.iterrows():
+        news = get_news_for_ticker(row['Symbol'])
+        news_cache[row['Symbol']] = news
+    
+    # Calculate position metrics
+    # IMPORTANT: Pct_Portfolio calculated vs total portfolio value (equity + cash)
+    df['Market_Value'] = df['Quantity'] * df['Price']
+    df['Gain_Loss'] = df['Market_Value'] - df['Cost_Basis']
+    df['Return_Pct'] = (df['Gain_Loss'] / df['Cost_Basis'] * 100)
+    total_mv = df['Market_Value'].sum()
+    total_value = total_mv + st.session_state.cash  # Total portfolio value
+    df['Pct_Portfolio'] = (df['Market_Value'] / total_value * 100)  # vs TOTAL VALUE
+    df['Runway'] = df['cash'] / df['burn']
+    
+    progress.progress(45, text="🚦 Liquidity analysis...")
+    
+    for idx, row in df.iterrows():
+        hist = hist_cache.get(row['Symbol'], pd.DataFrame())
+        liq = calculate_liquidity_metrics(row['Symbol'], hist, row['Price'], row['Market_Value'], port_size)
+        
+        for k, v in liq.items():
+            df.at[idx, f'Liq_{k}'] = v
+    
+    progress.progress(55, text="📊 Data confidence...")
+    
+    conf_breakdown_storage = {}
+    
+    for idx, row in df.iterrows():
+        fund_dict = {'burn_source': row['burn_source']}
+        info_dict = info_storage.get(row['Symbol'], {})
+        inferred = inferred_storage.get(row['Symbol'], {})
+        
+        conf = calculate_data_confidence(fund_dict, info_dict, inferred)
+        df.at[idx, 'Data_Confidence'] = conf['score']
+        df.at[idx, 'Conf_Verdict'] = conf['verdict']
+        
+        conf_breakdown_storage[row['Symbol']] = conf['breakdown']
+    
+    progress.progress(60, text="💀 Dilution risk...")
+    
+    dilution_factors_storage = {}
+    
+    for idx, row in df.iterrows():
+        news = news_cache.get(row['Symbol'], [])
+        cash_missing = row['cash'] == 10.0
+        burn_missing = row['burn_source'] == 'default'
+        insider = row.get('Insider_Buying_90d', False)
+        
+        dil = calculate_dilution_risk(
+            row['Runway'],
+            row['stage'],
+            abs(row.get('Drawdown_90d', 0)),
+            news,
+            cash_missing,
+            burn_missing,
+            insider
+        )
+        
+        df.at[idx, 'Dilution_Risk_Score'] = dil['score']
+        df.at[idx, 'Dilution_Verdict'] = dil['verdict']
+        
+        dilution_factors_storage[row['Symbol']] = dil['factors']
+    
+    # CRITICAL FIX: Calculate SMC BEFORE alpha scoring
+    progress.progress(65, text="📈 Calculating SMC signals...")
+    
+    smc_signals_storage = {}
+    
+    for idx, row in df.iterrows():
+        hist = hist_cache.get(row['Symbol'], pd.DataFrame())
+        
+        # Use v3 if available, otherwise v1
+        if INSTITUTIONAL_V3_AVAILABLE:
+            smc = calculate_smc_structure(hist, row['Symbol'])
+        else:
+            smc = calculate_smc_signals(hist, row['Price'])
+        
+        df.at[idx, 'SMC_Bias'] = smc.get('bias', smc.get('state', 'Neutral'))
+        df.at[idx, 'SMC_Score'] = smc.get('score', 50)
+        df.at[idx, 'SMC_Summary'] = smc.get('summary', smc.get('explanation', ''))
+        df.at[idx, 'SMC_State'] = smc.get('state', 'NEUTRAL')
+        df.at[idx, 'SMC_Event'] = smc.get('event', 'NONE')
+        
+        smc_signals_storage[row['Symbol']] = smc.get('signals', [])
+    
+    st.session_state.smc_signals_storage = smc_signals_storage
+    
+    # Now calculate alpha WITH SMC scores available
+    progress.progress(75, text="🎯 7-model alpha scoring...")
+    
+    alpha_models_storage = {}
+    alpha_breakdown_storage = {}
+    
+    for idx, row in df.iterrows():
+        hist = hist_cache.get(row['Symbol'], pd.DataFrame())
+        benchmark = get_benchmark_data(row.get('metal', 'Gold'))
+        
+        alpha_result = calculate_alpha_models(row, hist, benchmark)
+        
+        # CRITICAL FIX: Add SMC score to alpha
+        smc_score = row.get('SMC_Score', 50)
+        alpha_result['models']['M7_SMC'] = smc_score * 0.08
+        alpha_result['breakdown'][-2] = f"M7 SMC: {smc_score}/100 × 8% = {alpha_result['models']['M7_SMC']:.1f}"
+        
+        # Recalculate total
+        alpha_result['alpha_score'] = sum(alpha_result['models'].values())
+        
+        df.at[idx, 'Alpha_Score'] = alpha_result['alpha_score']
+        
+        alpha_models_storage[row['Symbol']] = alpha_result['models']
+        alpha_breakdown_storage[row['Symbol']] = alpha_result['breakdown']
+    
+    progress.progress(82, text="🔴 Sell-in-time analysis...")
+    
+    sell_triggers_storage = {}
+    
+    for idx, row in df.iterrows():
+        hist = hist_cache.get(row['Symbol'], pd.DataFrame())
+        news = news_cache.get(row['Symbol'], [])
+        
+        sell = calculate_sell_risk(row, hist, row.get('MA50', 0), row.get('MA200', 0), news, macro_regime)
+        
+        df.at[idx, 'Sell_Risk_Score'] = sell['score']
+        df.at[idx, 'Sell_Verdict'] = sell['verdict']
+        
+        # CRITICAL FIX: Store real triggers
+        sell_triggers_storage[row['Symbol']] = sell['all_triggers']
+    
+    progress.progress(90, text="✅ Final arbitration...")
+    
+    # Classify sleeves
+    for idx, row in df.iterrows():
+        liq_tier = row['Liq_tier_code']
+        daily_vol = row['Liq_dollar_vol_20d']
+        conf = row['Data_Confidence']
+        
+        if conf < 50:
+            df.at[idx, 'Sleeve'] = 'GAMBLING'
+        elif row['stage'] in ['Producer', 'Developer'] and daily_vol >= 200000 and conf >= 80:
+            df.at[idx, 'Sleeve'] = 'CORE'
+        else:
+            df.at[idx, 'Sleeve'] = 'TACTICAL'
+    
+    # Discovery exceptions
+    for idx, row in df.iterrows():
+        liq_metrics = {k.replace('Liq_', ''): v for k, v in row.items() if k.startswith('Liq_')}
+        
+        momentum_ok = row['Return_7d'] > 0 and row['Price'] > row.get('MA50', 0)
+        
+        exception = check_discovery_exception(
+            row, liq_metrics,
+            row['Alpha_Score'],
+            row['Data_Confidence'],
+            row['Dilution_Risk_Score'],
+            momentum_ok
+        )
+        
+        df.at[idx, 'Discovery_Exception'] = exception[0]
+        df.at[idx, 'Discovery_Reason'] = exception[1]
+    
+    # Final decisions
+    decisions = []
+    for _, row in df.iterrows():
+        liq_metrics = {k.replace('Liq_', ''): v for k, v in row.items() if k.startswith('Liq_')}
+        data_conf = {'score': row['Data_Confidence']}
+        dilution = {'score': row['Dilution_Risk_Score']}
+        
+        # CRITICAL FIX: Pass real triggers to arbitration
+        sell_triggers = sell_triggers_storage.get(row['Symbol'], [])
+        sell_risk = {
+            'score': row['Sell_Risk_Score'],
+            'hard_triggers': [t for t in sell_triggers if '💀' in t],
+            'soft_triggers': [t for t in sell_triggers if '⚠️' in t]
+        }
+        
+        discovery = (row['Discovery_Exception'], row['Discovery_Reason'])
+        
+        decision = arbitrate_final_decision(
+            row, liq_metrics, data_conf, dilution, sell_risk,
+            row['Alpha_Score'], macro_regime, discovery
+        )
+        
+        decisions.append(decision)
+    
+    for k in ['action', 'confidence', 'recommended_pct', 'max_allowed_pct', 'reasoning', 
+              'gates_passed', 'gates_failed', 'warnings']:
+        df[k.title()] = [d[k] for d in decisions]
+    
+    progress.progress(100, text="✅ Complete!")
 
-        # ------------------------------------------------------------------------
-        # Governance: validate, apply strict mode, build evidence pack
-        # ------------------------------------------------------------------------
-        # Invariants check (used by STRICT MODE & Trust Panel). Use the real model storage.
-        validation = validate_data_invariants(df, alpha_models_storage, news_cache)
-        st.session_state.validation = validation
+    # ------------------------------------------------------------------------
+    # Governance: validate, apply strict mode, build evidence pack
+    # ------------------------------------------------------------------------
+    # Invariants check (used by STRICT MODE & Trust Panel). Use the real model storage.
+    validation = validate_data_invariants(df, alpha_models_storage, news_cache)
+    st.session_state.validation = validation
 
-        if strict_mode:
-            preset = get_risk_profile_preset(st.session_state.get('risk_profile', 'Balanced'))
-            df, strict_downgrades = enforce_strict_mode(df, validation, st.session_state.get('strict_mode', False), st.session_state.get('risk_profile','Balanced'))
+    if st.session_state.get('strict_mode', False):
+        preset = get_risk_profile_preset(st.session_state.get('risk_profile', 'Balanced'))
+        df, strict_downgrades = enforce_strict_mode(df, validation, st.session_state.get('strict_mode', False), st.session_state.get('risk_profile','Balanced'))
 
-        # Save evidence pack for replay/debugging
-        try:
-            pack = create_evidence_pack(
-            df=df,
+    # Save evidence pack for replay/debugging
+    try:
+        pack = create_evidence_pack(
             portfolio_input=st.session_state.portfolio,
             cash=float(st.session_state.cash),
-            macro_regime=macro_regime,
+            results_df=df,
             news_cache=news_cache,
-            alpha_breakdown_storage=alpha_breakdown_storage,
-            sell_triggers_storage=sell_triggers_storage,
-            dilution_factors_storage=dilution_factors_storage,
-            conf_breakdown_storage=conf_breakdown_storage,
+            macro_regime=macro_regime,
             meta={
                 'version': VERSION,
                 'version_date': VERSION_DATE,
                 'risk_profile': st.session_state.get('risk_profile', 'Balanced'),
-                'strict_mode': bool(st.session_state.get('strict_mode', False)),
-                'freeze_time': bool(st.session_state.get('freeze_time', False)),
-                'disable_sector_fallback_news': bool(st.session_state.get('disable_sector_fallback_news', False)),
-                'disable_inferred_fundamentals': bool(st.session_state.get('disable_inferred_fundamentals', False))
-            },
-                tape_gate=st.session_state.get('tape_gate')
-            )
-            st.session_state.evidence_pack = pack
-            save_evidence_pack(pack)
-        except Exception:
-            st.session_state.evidence_pack = None
-
-        st.session_state.results = df
-        st.session_state.news_cache = news_cache
-        st.session_state.macro_regime = macro_regime
-        st.session_state.conf_breakdown_storage = conf_breakdown_storage
-        st.session_state.dilution_factors_storage = dilution_factors_storage
-        st.session_state.alpha_breakdown_storage = alpha_breakdown_storage
-        st.session_state.sell_triggers_storage = sell_triggers_storage
-        
-        st.success("✅ World-class analysis complete!")
-        st.rerun()
-    
-    except Exception as e:
-        # Global error handler - ensure app never goes dark
-        error_type = type(e).__name__
-        error_msg = str(e)
-        error_traceback = traceback.format_exc()
-        
-        st.error(f"❌ Analysis failed: {error_type}: {error_msg}")
-        
-        # Show stack trace in collapsed area
-        with st.expander("🔍 Technical Details (Stack Trace)", expanded=False):
-            st.code(error_traceback, language='python')
-        
-        # Best-effort create failure evidence pack
-        try:
-            failure_pack = {
-                'evidence_pack_id': f"ep_failure_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                'created_at_utc': _now_iso(),
-                'app_version': VERSION,
-                'app_version_date': VERSION_DATE,
-                'status': 'failure',
-                'error': {
-                    'type': error_type,
-                    'message': error_msg,
-                    'traceback': error_traceback
-                },
-                'inputs': {
-                    'portfolio': st.session_state.portfolio.to_dict(orient='records') if 'portfolio' in st.session_state else [],
-                    'cash': float(st.session_state.get('cash', 0)),
-                },
-                'meta': {
-                    'version': VERSION,
-                    'version_date': VERSION_DATE,
-                    'risk_profile': st.session_state.get('risk_profile', 'Balanced'),
-                    'strict_mode': bool(st.session_state.get('strict_mode', False)),
-                    'replay_mode': bool(st.session_state.get('replay_mode', False))
-                }
+                'strict_mode': bool(st.session_state.get('strict_mode', False))
             }
-            save_evidence_pack(failure_pack)
-            st.caption(f"💾 Failure evidence pack saved: {failure_pack['evidence_pack_id']}")
-        except Exception as pack_error:
-            st.warning(f"Could not save failure evidence pack: {pack_error}")
-        
-        # Ensure Streamlit keeps rendering
-        st.info("💡 The app is still running. You can try again or check the technical details above.")
+        )
+        st.session_state.evidence_pack = pack
+        save_evidence_pack(pack)
+    except Exception:
+        st.session_state.evidence_pack = None
+
+    st.session_state.results = df
+    st.session_state.news_cache = news_cache
+    st.session_state.macro_regime = macro_regime
+    st.session_state.conf_breakdown_storage = conf_breakdown_storage
+    st.session_state.dilution_factors_storage = dilution_factors_storage
+    st.session_state.alpha_breakdown_storage = alpha_breakdown_storage
+    st.session_state.sell_triggers_storage = sell_triggers_storage
+    
+    st.success("✅ World-class analysis complete!")
+    st.rerun()
 
 # ============================================================================
 # DISPLAY RESULTS
@@ -2453,267 +1946,56 @@ if 'results' in st.session_state:
         else:
             st.caption("🧪 Data validation: no issues detected")
 
-    # Alerts for significant changes
-    st.markdown("---")
-    st.markdown("### 🚨 Alerts")
-    
-    alerts = []
-    pack = st.session_state.get('evidence_pack')
-    
-    # Compare with most recent saved pack
-    saved_packs = list_evidence_packs()
-    prev_pack = None
-    if saved_packs and pack:
-        # Get most recent pack that's not the current one
-        current_id = pack.get('evidence_pack_id')
-        for pack_path in saved_packs:
-            try:
-                candidate = load_evidence_pack(pack_path)
-                if candidate.get('evidence_pack_id') != current_id:
-                    prev_pack = candidate
-                    break
-            except:
-                continue
-    
-    if prev_pack and prev_pack.get('results'):
-        prev_df = pd.DataFrame(prev_pack['results'])
-        prev_dict = prev_df.set_index('Symbol').to_dict('index')
-        
-        for _, row in df.iterrows():
-            sym = row['Symbol']
-            prev_row = prev_dict.get(sym)
-            
-            if prev_row:
-                # Check financing lifecycle changes
-                prev_overhang = prev_row.get('Financing_Overhang_Score', 0)
-                curr_overhang = row.get('Financing_Overhang_Score', 0)
-                prev_reasons = prev_row.get('Financing_Overhang_Reasons', [])
-                curr_reasons = row.get('Financing_Overhang_Reasons', [])
-                
-                # Detect lifecycle state changes
-                prev_has_closed = any('closed' in str(r).lower() for r in prev_reasons)
-                curr_has_closed = any('closed' in str(r).lower() for r in curr_reasons)
-                prev_has_atm = any('atm' in str(r).lower() for r in prev_reasons)
-                curr_has_atm = any('atm' in str(r).lower() for r in curr_reasons)
-                prev_has_shelf = any('shelf' in str(r).lower() for r in prev_reasons)
-                curr_has_shelf = any('shelf' in str(r).lower() for r in curr_reasons)
-                
-                if not prev_has_closed and curr_has_closed:
-                    alerts.append(f"✅ {sym}: Financing PP_CLOSED (overhang: {prev_overhang:.0f}→{curr_overhang:.0f})")
-                if not prev_has_atm and curr_has_atm:
-                    alerts.append(f"⚠️ {sym}: ATM financing detected (overhang: {prev_overhang:.0f}→{curr_overhang:.0f})")
-                if not prev_has_shelf and curr_has_shelf:
-                    alerts.append(f"⚠️ {sym}: SHELF filing detected (overhang: {prev_overhang:.0f}→{curr_overhang:.0f})")
-                
-                # Check sell risk crossing 70+
-                prev_sell = prev_row.get('Sell_Risk_Score', 0)
-                curr_sell = row.get('Sell_Risk_Score', 0)
-                if prev_sell < 70 and curr_sell >= 70:
-                    alerts.append(f"🔴 {sym}: Sell risk crossed 70+ ({prev_sell:.0f}→{curr_sell:.0f})")
-                
-                # Check financing overhang crossing 80+
-                if prev_overhang < 80 and curr_overhang >= 80:
-                    alerts.append(f"🔴 {sym}: Financing overhang crossed 80+ ({prev_overhang:.0f}→{curr_overhang:.0f})")
-    
-    if alerts:
-        for alert in alerts[:10]:  # Top 10 alerts
-            if '✅' in alert:
-                st.success(alert)
-            elif '🔴' in alert:
-                st.error(alert)
-            else:
-                st.warning(alert)
-    else:
-        st.info("No significant changes detected since last run.")
-    
     # Evidence pack / diff / rebalance
     with st.expander("🧾 Evidence Pack, Diff, and Rebalance", expanded=False):
         pack = st.session_state.get('evidence_pack')
         if pack:
-            st.caption(f"Pack id: {pack.get('evidence_pack_id', 'Unknown')} • created: {pack.get('created_at_utc', 'Unknown')}")
+            st.caption(f"Pack id: {pack.get('pack_id')} • created: {pack.get('created_at_local')}")
 
-            # "What changed since last run?" diff
-            st.markdown("### 📊 What Changed Since Last Run?")
-            
-            saved_packs = list_evidence_packs()
-            prev_pack = None
-            if saved_packs:
-                # Get most recent pack that's not the current one
-                current_id = pack.get('evidence_pack_id')
-                for pack_path in saved_packs:
-                    try:
-                        candidate = load_evidence_pack(pack_path)
-                        if candidate.get('evidence_pack_id') != current_id:
-                            prev_pack = candidate
-                            break
-                    except:
-                        continue
-            
-            if prev_pack and prev_pack.get('results'):
-                prev_df = pd.DataFrame(prev_pack['results'])
-                prev_dict = prev_df.set_index('Symbol').to_dict('index')
-                
-                diff_rows = []
-                for _, row in df.iterrows():
-                    sym = row['Symbol']
-                    prev_row = prev_dict.get(sym)
-                    
-                    if prev_row:
-                        prev_price = prev_row.get('Price', 0)
-                        curr_price = row.get('Price', 0)
-                        price_pct = ((curr_price - prev_price) / prev_price * 100) if prev_price > 0 else 0
-                        
-                        alpha_delta = row.get('Alpha_Score', 0) - prev_row.get('Alpha_Score', 0)
-                        sell_delta = row.get('Sell_Risk_Score', 0) - prev_row.get('Sell_Risk_Score', 0)
-                        dilution_delta = row.get('Dilution_Risk_Score', 0) - prev_row.get('Dilution_Risk_Score', 0)
-                        overhang_delta = row.get('Financing_Overhang_Score', 0) - prev_row.get('Financing_Overhang_Score', 0)
-                        rec_pct_delta = row.get('Recommended_Pct', 0) - prev_row.get('Recommended_Pct', 0)
-                        
-                        action_old = prev_row.get('Action', '')
-                        action_new = row.get('Action', '')
-                        
-                        # Only include rows with meaningful changes
-                        if (abs(price_pct) > 0.1 or abs(alpha_delta) > 1 or action_old != action_new or 
-                            abs(sell_delta) > 1 or abs(dilution_delta) > 1 or abs(overhang_delta) > 1 or abs(rec_pct_delta) > 0.1):
-                            diff_rows.append({
-                                'Symbol': sym,
-                                'ΔPrice%': f"{price_pct:+.1f}%",
-                                'ΔAlpha': f"{alpha_delta:+.1f}",
-                                'Action': f"{action_old}→{action_new}",
-                                'ΔSellRisk': f"{sell_delta:+.1f}",
-                                'ΔDilutionRisk': f"{dilution_delta:+.1f}",
-                                'ΔFinancingOverhang': f"{overhang_delta:+.1f}",
-                                'ΔRecPct': f"{rec_pct_delta:+.1f}%"
-                            })
-                
-                if diff_rows:
-                    diff_df = pd.DataFrame(diff_rows)
-                    # Calculate mover score for highlighting
-                    diff_df['_mover_score'] = (
-                        diff_df['ΔAlpha'].str.replace('+', '').str.replace('−', '-').astype(float).abs() +
-                        diff_df['ΔSellRisk'].str.replace('+', '').str.replace('−', '-').astype(float).abs() * 0.5 +
-                        diff_df['ΔFinancingOverhang'].str.replace('+', '').str.replace('−', '-').astype(float).abs() * 0.5
-                    )
-                    diff_df = diff_df.sort_values('_mover_score', ascending=False)
-                    
-                    st.dataframe(
-                        diff_df.drop(columns=['_mover_score']).head(20),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    
-                    # Highlight top 5 movers
-                    if len(diff_df) > 0:
-                        st.caption(f"📈 Top movers: {', '.join(diff_df.head(5)['Symbol'].tolist())}")
-                else:
-                    st.info("No significant changes detected.")
+            # Diff vs previous pack (if any)
+            prev_id = st.session_state.get('prev_pack_id_for_diff')
+            if prev_id:
+                prev = load_evidence_pack(prev_id)
             else:
-                st.info("💡 No prior evidence pack found. Run analysis again to see changes.")
+                prev = None
 
-            # Rebalance plan table
-            st.markdown("### 💰 Rebalance Plan")
-            
-            allow_leverage = st.toggle("Allow leverage (buys can exceed cash)", value=False, key="allow_leverage")
-            
-            rebalance_rows = []
-            total_buys = 0.0
-            total_sells = 0.0
-            
-            for _, row in df.iterrows():
-                sym = row['Symbol']
-                current_pct = row.get('Pct_Portfolio', 0)
-                target_pct = row.get('Recommended_Pct', 0)
-                delta_pct = target_pct - current_pct
-                trade_dollars = (delta_pct / 100.0) * total_value
-                
-                # Liquidity warning
-                liq_tier = row.get('Liq_tier_code', 'L0')
-                days_to_exit = row.get('Liq_days_to_exit', 999)
-                liq_warning = ""
-                if liq_tier in ['L0', 'L1']:
-                    liq_warning = f"⚠️ {liq_tier} tier"
-                if days_to_exit > 10:
-                    liq_warning += f" ({days_to_exit:.0f}d exit)"
-                
-                # Reason for trade
-                action = row.get('Action', '')
-                reason_parts = []
-                if 'BUY' in action or 'ADD' in action:
-                    reason_parts.append(f"Alpha: {row.get('Alpha_Score', 0):.0f}")
-                if row.get('Sell_Risk_Score', 0) >= 30:
-                    reason_parts.append(f"Sell risk: {row.get('Sell_Risk_Score', 0):.0f}")
-                reason = " | ".join(reason_parts) if reason_parts else action
-                
-                if trade_dollars > 0:
-                    total_buys += trade_dollars
+            if prev and prev.get('results'):
+                import pandas as _pd
+                prev_df = _pd.DataFrame(prev['results'])
+                cur_df = df.copy()
+                key = 'Symbol'
+                cols = ['Action','Alpha_Score','Sell_Risk_Score','Recommended_Pct','Pct_Portfolio']
+                merged = prev_df[[key]+cols].merge(cur_df[[key]+cols], on=key, how='outer', suffixes=('_prev','_cur'))
+                changes = []
+                for _,r in merged.iterrows():
+                    sym = r.get(key)
+                    for c in cols:
+                        a=r.get(f'{c}_prev')
+                        b=r.get(f'{c}_cur')
+                        if (a!=b) and not (_pd.isna(a) and _pd.isna(b)):
+                            changes.append({'Symbol':sym,'Field':c,'Prev':a,'Now':b})
+                if changes:
+                    st.write("**What changed vs previous run**")
+                    st.dataframe(_pd.DataFrame(changes).head(200), use_container_width=True, hide_index=True)
                 else:
-                    total_sells += abs(trade_dollars)
-                
-                rebalance_rows.append({
-                    'Symbol': sym,
-                    'Current%': f"{current_pct:.2f}%",
-                    'Target%': f"{target_pct:.2f}%",
-                    'Δ%': f"{delta_pct:+.2f}%",
-                    '$ Trade': f"${trade_dollars:+,.0f}",
-                    'Liquidity Warning': liq_warning,
-                    'Reason': reason
-                })
-            
-            rebalance_df = pd.DataFrame(rebalance_rows)
-            rebalance_df = rebalance_df[rebalance_df['$ Trade'] != '$0']
-            
-            # Cash constraint enforcement
-            available_cash = st.session_state.cash
-            if not allow_leverage and total_buys > available_cash:
-                st.warning(f"⚠️ Total buys (${total_buys:,.0f}) exceed available cash (${available_cash:,.0f}). Adjusting...")
-                # Scale down buys proportionally
-                scale_factor = available_cash / total_buys if total_buys > 0 else 0
-                for idx in rebalance_df.index:
-                    trade_str = rebalance_df.at[idx, '$ Trade']
-                    if trade_str.startswith('$') and '+' in trade_str:
-                        trade_val = float(trade_str.replace('$', '').replace(',', '').replace('+', ''))
-                        if trade_val > 0:
-                            rebalance_df.at[idx, '$ Trade'] = f"${trade_val * scale_factor:+,.0f}"
-                            # Recalculate delta %
-                            sym = rebalance_df.at[idx, 'Symbol']
-                            orig_row = df[df['Symbol'] == sym].iloc[0]
-                            new_trade = trade_val * scale_factor
-                            new_target_pct = (orig_row['Market_Value'] + new_trade) / total_value * 100
-                            rebalance_df.at[idx, 'Target%'] = f"{new_target_pct:.2f}%"
-                            rebalance_df.at[idx, 'Δ%'] = f"{new_target_pct - orig_row['Pct_Portfolio']:+.2f}%"
-            
-            if not rebalance_df.empty:
-                # Sort by absolute trade value
-                def sort_key(val):
-                    try:
-                        cleaned = val.replace('$', '').replace(',', '').replace('+', '').replace('−', '-')
-                        return abs(float(cleaned))
-                    except:
-                        return 0.0
-                
-                rebalance_df_sorted = rebalance_df.copy()
-                rebalance_df_sorted['_sort_val'] = rebalance_df_sorted['$ Trade'].apply(sort_key)
-                rebalance_df_sorted = rebalance_df_sorted.sort_values('_sort_val', ascending=False).drop(columns=['_sort_val'])
-                
-                st.dataframe(rebalance_df_sorted, use_container_width=True, hide_index=True)
-                
-                # CSV download
-                csv_data = rebalance_df.to_csv(index=False)
-                st.download_button(
-                    "📥 Download Rebalance Plan (CSV)",
-                    data=csv_data,
-                    file_name=f"rebalance_plan_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
+                    st.caption("No diffs vs previous run")
             else:
-                st.info("No rebalancing needed.")
-            
-            st.markdown("---")
+                st.caption("Run at least twice (or select a previous evidence pack) to see diffs.")
+
+            # Rebalance table
+            import pandas as _pd
+            cur = df[['Symbol','Pct_Portfolio','Recommended_Pct','Market_Value']].copy()
+            cur['Delta_Pct'] = cur['Recommended_Pct'] - cur['Pct_Portfolio']
+            cur['Target_$'] = total_value * (cur['Recommended_Pct'] / 100.0)
+            cur['Delta_$'] = cur['Target_$'] - cur['Market_Value']
+            cur['Trade'] = cur['Delta_$'].apply(lambda x: 'BUY' if x>0 else ('SELL' if x<0 else 'HOLD'))
+            st.write("**Suggested rebalance (vs total portfolio value)**")
+            st.dataframe(cur.sort_values('Delta_$', ascending=False), use_container_width=True, hide_index=True)
+
             st.download_button(
                 "Download evidence pack (JSON)",
                 data=json.dumps(pack, indent=2),
-                file_name=f"alpha_evidence_{pack.get('evidence_pack_id', 'unknown')}.json",
+                file_name=f"alpha_evidence_{pack.get('pack_id')}.json",
                 mime="application/json",
                 use_container_width=True,
             )
@@ -2839,15 +2121,6 @@ if 'results' in st.session_state:
         badge_html += f'<span class="badge-tactical">Conf: {row["Data_Confidence"]:.0f}%</span> '
         badge_html += f'<span class="badge-tactical">Dil: {row["Dilution_Risk_Score"]:.0f}/100</span> '
         
-        # Financing Overhang badge
-        overhang_score = row.get('Financing_Overhang_Score', 0)
-        if overhang_score >= 70:
-            badge_html += f'<span class="badge-l1">FinOverhang: {overhang_score:.0f}/100</span> '
-        elif overhang_score >= 40:
-            badge_html += f'<span class="badge-l2">FinOverhang: {overhang_score:.0f}/100</span> '
-        elif overhang_score > 0:
-            badge_html += f'<span class="badge-tactical">FinOverhang: {overhang_score:.0f}/100</span> '
-        
         if row.get('Insider_Buying_90d', False):
             badge_html += '<span class="badge-insider">INSIDER BUY</span> '
         
@@ -2868,20 +2141,6 @@ if 'results' in st.session_state:
         ticker_news = news_cache.get(row['Symbol'], [])
         news_quality, news_badge = calculate_news_quality(ticker_news)
         badge_html += f'<span class="{news_badge}">News: {news_quality}</span> '
-        
-        # Financing Overhang details (if significant)
-        overhang_score = row.get('Financing_Overhang_Score', 0)
-        overhang_reasons = row.get('Financing_Overhang_Reasons', [])
-        if overhang_score >= 40 and overhang_reasons:
-            reasons_text = ' | '.join(overhang_reasons[:2])
-            badge_html += f'<span class="badge-tactical">FinOverhang: {reasons_text}</span> '
-        
-        # Financing Overhang details (if significant)
-        overhang_score = row.get('Financing_Overhang_Score', 0)
-        overhang_reasons = row.get('Financing_Overhang_Reasons', [])
-        if overhang_score >= 40 and overhang_reasons:
-            reasons_text = ' | '.join(overhang_reasons[:2])
-            badge_html += f'<span class="badge-tactical">FinOverhang: {reasons_text}</span> '
         
         st.markdown(badge_html, unsafe_allow_html=True)
         

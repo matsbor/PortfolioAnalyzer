@@ -1,0 +1,389 @@
+====================================================================================================
+ALPHA MINER ULTIMATE - COMPLETE CAPITAL ALLOCATION SYSTEM
+Date: 2026-01-15 14:38:42
+Philosophy: SURVIVE FIRST, ALPHA SECOND
+====================================================================================================
+
+PORTFOLIO SUMMARY
+----------------------------------------------------------------------------------------------------
+Total Value:      $  164,685.05
+Total Return:     $  +30,404.57  (+22.64%)
+Positions:                  14
+
+🚨 CRITICAL ALERTS - IMMEDIATE ACTION REQUIRED
+====================================================================================================
+
+EXNRF - EXNRF
+Action Required: 🚨 SELL / DO NOT BUY
+  • 🚨 DILUTION RISK HIGH: 5.0 months cash. High probability of financing within 6 months.
+
+LOMLF - LOMLF
+Action Required: 🚨 SELL / DO NOT BUY
+  • 🚨 DILUTION RISK HIGH: 4.0 months cash. High probability of financing within 6 months.
+
+JZRIF - JZRIF
+Action Required: 🚨 SELL / DO NOT BUY
+  • 🚨 DILUTION RISK HIGH: 5.0 months cash. High probability of financing within 6 months.
+
+TODAY'S ACTIONS
+====================================================================================================
+
+🚨 IMMEDIATE ACTIONS (Do today):
+----------------------------------------------------------------------------------------------------
+
+EXNRF: 🚨 SELL / DO NOT BUY
+  Reasoning: 🚨 DILUTION RISK HIGH: 5.0 months cash. High probability of financing within 6 months.
+  Override: 🔒 SURVIVAL GATE FAILURE OVERRIDES ALL BULLISH SIGNALS
+  Confidence: 1.00
+
+LOMLF: 🚨 SELL / DO NOT BUY
+  Reasoning: 🚨 DILUTION RISK HIGH: 4.0 months cash. High probability of financing within 6 months.
+  Override: 🔒 SURVIVAL GATE FAILURE OVERRIDES ALL BULLISH SIGNALS
+  Confidence: 1.00
+
+JZRIF: 🚨 SELL / DO NOT BUY
+  Reasoning: 🚨 DILUTION RISK HIGH: 5.0 months cash. High probability of financing within 6 months.
+  Override: 🔒 SURVIVAL GATE FAILURE OVERRIDES ALL BULLISH SIGNALS
+  Confidence: 1.00
+
+
+📋 NEAR-TERM ACTIONS (This week):
+----------------------------------------------------------------------------------------------------
+
+ITRG: 🟡 TRIM / REDUCE
+  → Weakening position | Ignored
+
+SMAGF: 🟢 STRONG BUY / ADD
+  → Strong setup | 🟢 Emerging
+
+WRLGF: 🔵 BUY / ACCUMULATE
+  → Decent opportunity | 🟢 Emerging
+
+GSVRF: 🟢 STRONG BUY / ADD
+  → Strong setup | Momentum (+104%) | 🔵 Validation
+
+TSKFF: 🔵 BUY / ACCUMULATE
+  → Decent opportunity | 🟢 Emerging
+
+
+
+COMPLETE POSITION ANALYSIS
+====================================================================================================
+
+====================================================================================================
+GSVRF - GSVRF
+====================================================================================================
+Position:         9,049 shares @ $0.5450 = $4,931.71 (3.0%)
+Cost Basis:       $2,415.31
+Return:           $+2,516.40 (+104.2%)
+Day Change:       +0.00%
+Stage:            Producer | Silver | Mexico
+
+ALPHA SCORE:      80.0/100
+RECOMMENDATION:   🟢 STRONG BUY / ADD
+REASONING:        Strong setup | Momentum (+104%) | 🔵 Validation
+CONFIDENCE:       0.85
+NARRATIVE:        🔵 Validation - Institutions entering (GOOD)
+
+SURVIVAL GATES:
+  ✅ PASS Cash Runway: 20.0 vs 8.0
+  ✅ PASS Position Size: 3.0 vs 15.0
+  ✅ PASS Jurisdiction Risk: 40.0 vs 60.0
+  ✅ PASS Performance Check: 104.2 vs -40.0
+
+
+====================================================================================================
+JAGGF - JAGGF
+====================================================================================================
+Position:         2,965 shares @ $6.1200 = $18,145.80 (11.0%)
+Cost Basis:       $14,558.14
+Return:           $+3,587.66 (+24.6%)
+Day Change:       +1.09%
+Stage:            Producer | Gold | Brazil
+
+ALPHA SCORE:      80.0/100
+RECOMMENDATION:   🟢 STRONG BUY / ADD
+REASONING:        Strong setup | 🟢 Emerging
+CONFIDENCE:       0.85
+NARRATIVE:        🟢 Emerging - Early smart money (BEST PHASE)
+
+SURVIVAL GATES:
+  ✅ PASS Cash Runway: 25.0 vs 8.0
+  ✅ PASS Position Size: 11.0 vs 15.0
+  ✅ PASS Jurisdiction Risk: 45.0 vs 60.0
+  ✅ PASS Performance Check: 24.6 vs -40.0
+
+
+====================================================================================================
+SMDRF - SMDRF
+====================================================================================================
+Position:         7,072 shares @ $1.7600 = $12,446.72 (7.6%)
+Cost Basis:       $6,939.18
+Return:           $+5,507.54 (+79.4%)
+Day Change:       +5.14%
+Stage:            Developer | Silver | Mexico
+
+ALPHA SCORE:      80.0/100
+RECOMMENDATION:   🟢 STRONG BUY / ADD
+REASONING:        Strong setup | Momentum (+79%) | 🔵 Validation
+CONFIDENCE:       0.85
+NARRATIVE:        🔵 Validation - Institutions entering (GOOD)
+
+SURVIVAL GATES:
+  ✅ PASS Cash Runway: 12.0 vs 8.0
+  ✅ PASS Position Size: 7.6 vs 15.0
+  ✅ PASS Jurisdiction Risk: 40.0 vs 60.0
+  ✅ PASS Performance Check: 79.4 vs -40.0
+
+
+====================================================================================================
+SMAGF - SMAGF
+====================================================================================================
+Position:         8,335 shares @ $1.3550 = $11,293.93 (6.9%)
+Cost Basis:       $9,928.39
+Return:           $+1,365.54 (+13.8%)
+Day Change:       +3.67%
+Stage:            Developer | Gold | Unknown
+
+ALPHA SCORE:      75.0/100
+RECOMMENDATION:   🟢 STRONG BUY / ADD
+REASONING:        Strong setup | 🟢 Emerging
+CONFIDENCE:       0.85
+NARRATIVE:        🟢 Emerging - Early smart money (BEST PHASE)
+
+SURVIVAL GATES:
+  ✅ PASS Cash Runway: 8.0 vs 8.0
+  ✅ PASS Position Size: 6.9 vs 15.0
+  ✅ PASS Jurisdiction Risk: 50.0 vs 60.0
+  ✅ PASS Performance Check: 13.8 vs -40.0
+
+
+====================================================================================================
+AG - AG
+====================================================================================================
+Position:         638 shares @ $20.3654 = $12,993.13 (7.9%)
+Cost Basis:       $7,594.99
+Return:           $+5,398.14 (+71.1%)
+Day Change:       +2.70%
+Stage:            Producer | Silver | Mexico
+
+ALPHA SCORE:      75.0/100
+RECOMMENDATION:   🟢 STRONG BUY / ADD
+REASONING:        Strong setup | Momentum (+71%) | 🔵 Validation
+CONFIDENCE:       0.85
+NARRATIVE:        🔵 Validation - Institutions entering (GOOD)
+
+SURVIVAL GATES:
+  ✅ PASS Cash Runway: 50.0 vs 8.0
+  ✅ PASS Position Size: 7.9 vs 15.0
+  ✅ PASS Jurisdiction Risk: 40.0 vs 60.0
+  ✅ PASS Performance Check: 71.1 vs -40.0
+
+
+====================================================================================================
+WRLGF - WRLGF
+====================================================================================================
+Position:         25,929 shares @ $0.8810 = $22,843.45 (13.9%)
+Cost Basis:       $18,833.21
+Return:           $+4,010.24 (+21.3%)
+Day Change:       -1.39%
+Stage:            Explorer | Gold | Canada
+
+ALPHA SCORE:      70.0/100
+RECOMMENDATION:   🔵 BUY / ACCUMULATE
+REASONING:        Decent opportunity | 🟢 Emerging
+CONFIDENCE:       0.75
+NARRATIVE:        🟢 Emerging - Early smart money (BEST PHASE)
+
+SURVIVAL GATES:
+  ✅ PASS Cash Runway: 10.0 vs 8.0
+  ✅ PASS Position Size: 13.9 vs 15.0
+  ✅ PASS Jurisdiction Risk: 10.0 vs 60.0
+  ✅ PASS Performance Check: 21.3 vs -40.0
+
+
+====================================================================================================
+TSKFF - TSKFF
+====================================================================================================
+Position:         13,027 shares @ $1.3700 = $17,846.99 (10.8%)
+Cost Basis:       $13,857.41
+Return:           $+3,989.58 (+28.8%)
+Day Change:       +0.29%
+Stage:            Explorer | Gold | Canada
+
+ALPHA SCORE:      70.0/100
+RECOMMENDATION:   🔵 BUY / ACCUMULATE
+REASONING:        Decent opportunity | 🟢 Emerging
+CONFIDENCE:       0.75
+NARRATIVE:        🟢 Emerging - Early smart money (BEST PHASE)
+
+SURVIVAL GATES:
+  ✅ PASS Cash Runway: 15.0 vs 8.0
+  ✅ PASS Position Size: 10.8 vs 15.0
+  ✅ PASS Jurisdiction Risk: 10.0 vs 60.0
+  ✅ PASS Performance Check: 28.8 vs -40.0
+
+
+====================================================================================================
+EXNRF - EXNRF
+====================================================================================================
+Position:         11,749 shares @ $0.3900 = $4,582.11 (2.8%)
+Cost Basis:       $3,242.97
+Return:           $+1,339.14 (+41.3%)
+Day Change:       -2.50%
+Stage:            Developer | Silver | Mexico
+
+ALPHA SCORE:      50.0/100
+RECOMMENDATION:   🚨 SELL / DO NOT BUY
+REASONING:        🚨 DILUTION RISK HIGH: 5.0 months cash. High probability of financing within 6 months.
+CONFIDENCE:       1.00
+NARRATIVE:        🟢 Emerging - Early smart money (BEST PHASE)
+
+SURVIVAL GATES:
+  🚨 FAIL Cash Runway: 5.0 vs 8.0
+       🚨 DILUTION RISK HIGH: 5.0 months cash. High probability of financing within 6 months.
+  ✅ PASS Position Size: 2.8 vs 15.0
+  ✅ PASS Jurisdiction Risk: 40.0 vs 60.0
+  ✅ PASS Performance Check: 41.3 vs -40.0
+
+
+====================================================================================================
+LOMLF - LOMLF
+====================================================================================================
+Position:         24,557 shares @ $0.2250 = $5,525.32 (3.4%)
+Cost Basis:       $5,006.76
+Return:           $+518.56 (+10.4%)
+Day Change:       -2.17%
+Stage:            Explorer | Gold | Fiji
+
+ALPHA SCORE:      50.0/100
+RECOMMENDATION:   🚨 SELL / DO NOT BUY
+REASONING:        🚨 DILUTION RISK HIGH: 4.0 months cash. High probability of financing within 6 months.
+CONFIDENCE:       1.00
+NARRATIVE:        🟢 Emerging - Early smart money (BEST PHASE)
+
+SURVIVAL GATES:
+  🚨 FAIL Cash Runway: 4.0 vs 8.0
+       🚨 DILUTION RISK HIGH: 4.0 months cash. High probability of financing within 6 months.
+  ✅ PASS Position Size: 3.4 vs 15.0
+  ✅ PASS Jurisdiction Risk: 50.0 vs 60.0
+  ✅ PASS Performance Check: 10.4 vs -40.0
+
+
+====================================================================================================
+JZRIF - JZRIF
+====================================================================================================
+Position:         19,841 shares @ $0.3500 = $6,944.35 (4.2%)
+Cost Basis:       $5,959.25
+Return:           $+985.10 (+16.5%)
+Day Change:       +20.69%
+Stage:            Explorer | Gold | Canada
+
+ALPHA SCORE:      50.0/100
+RECOMMENDATION:   🚨 SELL / DO NOT BUY
+REASONING:        🚨 DILUTION RISK HIGH: 5.0 months cash. High probability of financing within 6 months.
+CONFIDENCE:       1.00
+NARRATIVE:        🟢 Emerging - Early smart money (BEST PHASE)
+
+SURVIVAL GATES:
+  🚨 FAIL Cash Runway: 5.0 vs 8.0
+       🚨 DILUTION RISK HIGH: 5.0 months cash. High probability of financing within 6 months.
+  ✅ PASS Position Size: 4.2 vs 15.0
+  ✅ PASS Jurisdiction Risk: 10.0 vs 60.0
+  ✅ PASS Performance Check: 16.5 vs -40.0
+
+
+====================================================================================================
+AGXPF - AGXPF
+====================================================================================================
+Position:         32,342 shares @ $0.7655 = $24,757.80 (15.0%)
+Cost Basis:       $24,015.26
+Return:           $+742.54 (+3.1%)
+Day Change:       +0.34%
+Stage:            Explorer | Silver | Peru
+
+ALPHA SCORE:      45.0/100
+RECOMMENDATION:   ⚪ NO ACTION - Low confidence (0.60)
+REASONING:        Mixed signals | Ignored | 1 survival concerns
+CONFIDENCE:       0.60
+NARRATIVE:        Ignored - No attention
+
+SURVIVAL GATES:
+  ✅ PASS Cash Runway: 18.0 vs 8.0
+  ⚠️  FAIL Position Size: 15.0 vs 15.0
+       ⚠️ OVER-CONCENTRATED: 15.0% of portfolio (max: 15.0%). Reduce to manage risk.
+  ✅ PASS Jurisdiction Risk: 45.0 vs 60.0
+  ✅ PASS Performance Check: 3.1 vs -40.0
+
+
+====================================================================================================
+BORMF - BORMF
+====================================================================================================
+Position:         5,172 shares @ $1.0800 = $5,585.76 (3.4%)
+Cost Basis:       $5,540.99
+Return:           $+44.77 (+0.8%)
+Day Change:       +1.89%
+Stage:            Explorer | Gold | Canada
+
+ALPHA SCORE:      45.0/100
+RECOMMENDATION:   ⚪ NO ACTION - Low confidence (0.60)
+REASONING:        Mixed signals | Ignored | 1 survival concerns
+CONFIDENCE:       0.60
+NARRATIVE:        Ignored - No attention
+
+SURVIVAL GATES:
+  ⚠️  FAIL Cash Runway: 7.0 vs 8.0
+       ⚠️ DILUTION WATCH: 7.0 months cash. Monitor for financing announcements.
+  ✅ PASS Position Size: 3.4 vs 15.0
+  ✅ PASS Jurisdiction Risk: 10.0 vs 60.0
+  ✅ PASS Performance Check: 0.8 vs -40.0
+
+
+====================================================================================================
+LUCMF - LUCMF
+====================================================================================================
+Position:         7,079 shares @ $1.1700 = $8,282.43 (5.0%)
+Cost Basis:       $8,550.49
+Return:           $-268.06 (-3.1%)
+Day Change:       +2.63%
+Stage:            Explorer | Gold | Canada
+
+ALPHA SCORE:      45.0/100
+RECOMMENDATION:   ⚪ NO ACTION - Low confidence (0.60)
+REASONING:        Mixed signals | Ignored | 1 survival concerns
+CONFIDENCE:       0.60
+NARRATIVE:        Ignored - No attention
+
+SURVIVAL GATES:
+  ⚠️  FAIL Cash Runway: 6.0 vs 8.0
+       ⚠️ DILUTION WATCH: 6.0 months cash. Monitor for financing announcements.
+  ✅ PASS Position Size: 5.0 vs 15.0
+  ✅ PASS Jurisdiction Risk: 10.0 vs 60.0
+  ✅ PASS Performance Check: -3.1 vs -40.0
+
+
+====================================================================================================
+ITRG - ITRG
+====================================================================================================
+Position:         2,072 shares @ $4.1050 = $8,505.56 (5.2%)
+Cost Basis:       $7,838.13
+Return:           $+667.43 (+8.5%)
+Day Change:       -3.18%
+Stage:            Explorer | Gold | Canada
+
+ALPHA SCORE:      40.0/100
+RECOMMENDATION:   🟡 TRIM / REDUCE
+REASONING:        Weakening position | Ignored
+CONFIDENCE:       0.70
+NARRATIVE:        Ignored - No attention
+
+SURVIVAL GATES:
+  ✅ PASS Cash Runway: 12.0 vs 8.0
+  ✅ PASS Position Size: 5.2 vs 15.0
+  ✅ PASS Jurisdiction Risk: 10.0 vs 60.0
+  ✅ PASS Performance Check: 8.5 vs -40.0
+
+
+====================================================================================================
+END OF REPORT
+====================================================================================================
