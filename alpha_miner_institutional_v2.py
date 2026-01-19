@@ -334,6 +334,7 @@ def create_evidence_pack(
     dilution_factors_storage: dict,
     conf_breakdown_storage: dict,
     meta: dict | None = None,
+    tape_gate: dict | None = None,
 ):
     """Create a replayable, self-contained evidence pack (zero network calls needed to render)."""
     pack = {
@@ -347,6 +348,7 @@ def create_evidence_pack(
             'cash': float(cash),
         },
         'macro_regime': macro_regime or {},
+        'tape_gate': tape_gate or {},
         'results': df.to_dict(orient='records'),
         'caches': {
             'news_cache': news_cache or {},
@@ -974,6 +976,76 @@ def calculate_sell_risk(row, hist_data, ma50, ma200, news_items, macro_regime):
 # H) MACRO REGIME
 # ============================================================================
 
+def calculate_tape_gate(macro_regime, gold_analysis=None, silver_analysis=None):
+    """
+    Calculate tape/regime gate decision helper.
+    Returns: {regime_label, new_buys_allowed, throttle, reasons[]}
+    """
+    gate = {
+        'regime_label': 'NEUTRAL',
+        'new_buys_allowed': True,
+        'throttle': 1.0,
+        'reasons': []
+    }
+    
+    # Use macro_regime inputs
+    dxy = macro_regime.get('dxy', 0)
+    vix = macro_regime.get('vix', 0)
+    allow_new_buys = macro_regime.get('allow_new_buys', True)
+    throttle_factor = macro_regime.get('throttle_factor', 1.0)
+    regime = macro_regime.get('regime', 'NEUTRAL')
+    
+    # DXY trend
+    dxy_ma = macro_regime.get('dxy_ma', dxy) if 'dxy_ma' in macro_regime else dxy
+    if dxy > 0 and dxy_ma > 0:
+        if dxy > dxy_ma * 1.05:
+            gate['reasons'].append('DXY: Strong (bearish for gold)')
+            gate['throttle'] *= 0.8
+        elif dxy < dxy_ma * 0.95:
+            gate['reasons'].append('DXY: Weak (bullish for gold)')
+        else:
+            gate['reasons'].append('DXY: Neutral')
+    else:
+        gate['reasons'].append('DXY: Unknown')
+    
+    # VIX regime
+    if vix > 0:
+        if vix > 25:
+            gate['regime_label'] = 'DEFENSIVE'
+            gate['new_buys_allowed'] = False
+            gate['throttle'] = 0.5
+            gate['reasons'].append(f'VIX: {vix:.1f} (defensive)')
+        elif vix < 15:
+            gate['regime_label'] = 'RISK-ON'
+            gate['reasons'].append(f'VIX: {vix:.1f} (risk-on)')
+        else:
+            gate['reasons'].append(f'VIX: {vix:.1f} (neutral)')
+    else:
+        gate['reasons'].append('VIX: Unknown')
+    
+    # Metal outlook (if available)
+    if gold_analysis and silver_analysis:
+        gold_bias = gold_analysis.get('bias_short', 'NEUTRAL')
+        silver_bias = silver_analysis.get('bias_short', 'NEUTRAL')
+        if 'BEARISH' in str(gold_bias) or 'BEARISH' in str(silver_bias):
+            gate['throttle'] *= 0.9
+            gate['reasons'].append('Metals: Bearish')
+        elif 'BULLISH' in str(gold_bias) or 'BULLISH' in str(silver_bias):
+            gate['reasons'].append('Metals: Bullish')
+        else:
+            gate['reasons'].append('Metals: Neutral')
+    else:
+        gate['reasons'].append('Metals: Unknown')
+    
+    # Override with macro_regime settings
+    gate['new_buys_allowed'] = allow_new_buys
+    gate['throttle'] = min(gate['throttle'], throttle_factor)
+    if regime == 'DEFENSIVE':
+        gate['regime_label'] = 'DEFENSIVE'
+        gate['new_buys_allowed'] = False
+    
+    return gate
+
 def calculate_macro_regime():
     """Calculate macro regime"""
     regime = {
@@ -1041,6 +1113,166 @@ def calculate_macro_regime():
     return regime
 
 # ============================================================================
+# I) FINANCING OVERHANG CALCULATION
+# ============================================================================
+
+def calculate_financing_overhang(news_items, ticker, runway_months):
+    """
+    Calculate financing overhang score (0-100).
+    Integrates with analyze_news_intelligence if v3 available, otherwise lightweight fallback.
+    
+    Returns: dict with 'score' (0-100) and 'reasons' (list of 2 short strings)
+    """
+    result = {
+        'score': 0.0,
+        'reasons': []
+    }
+    
+    if not news_items:
+        result['reasons'] = ['No news available']
+        return result
+    
+    # Try v3 integration first
+    if INSTITUTIONAL_V3_AVAILABLE:
+        try:
+            news_intel = analyze_news_intelligence(news_items, ticker)
+            status = news_intel.get('financing_status')
+            fin_type = news_intel.get('financing_type')
+            impact = news_intel.get('financing_impact', 0)
+            
+            # Find most recent financing event days_ago from news items
+            days_ago = None
+            for item in news_items:
+                ts = item.get('timestamp', 0)
+                if ts > 0:
+                    try:
+                        if ts > 1e12:
+                            ts = ts / 1000
+                        news_date = datetime.datetime.fromtimestamp(ts)
+                        days = (datetime.datetime.now() - news_date).days
+                        if days_ago is None or days < days_ago:
+                            days_ago = days
+                    except:
+                        pass
+            
+            if status == 'CLOSED':
+                if days_ago is not None and days_ago <= 7:
+                    # PP_CLOSED <=7d: overhang drops materially
+                    result['score'] = max(20, 40 + impact)
+                    result['reasons'] = [f'Financing closed {days_ago}d ago', 'Runway extended']
+                elif days_ago is not None and days_ago <= 30:
+                    result['score'] = max(20, 35 + impact)
+                    result['reasons'] = [f'Financing closed {days_ago}d ago', 'Recent close']
+                else:
+                    result['score'] = max(0, 30 + impact)
+                    result['reasons'] = ['Financing closed', 'Older event']
+            elif status == 'ANNOUNCED' or status == 'PRICED':
+                # ANNOUNCED not closed: 60-85
+                if fin_type == 'ATM':
+                    result['score'] = min(95, 85 + (impact if impact > 0 else 10))
+                    result['reasons'] = ['Active ATM', 'Ongoing dilution risk']
+                elif fin_type == 'SHELF':
+                    result['score'] = min(95, 80 + (impact if impact > 0 else 10))
+                    result['reasons'] = ['Shelf filed', 'Dilution imminent']
+                else:
+                    recency_factor = max(0, 30 - (days_ago or 90)) / 30.0
+                    result['score'] = 60 + (25 * recency_factor)
+                    result['reasons'] = ['Financing announced', 'Not yet closed']
+            elif status == 'NONE':
+                result['score'] = 0.0
+                result['reasons'] = ['No financing events']
+            else:
+                # Unknown status
+                result['score'] = 10.0
+                result['reasons'] = ['Unknown financing status']
+            
+            return result
+        except Exception as e:
+            # Fall through to lightweight fallback
+            pass
+    
+    # Lightweight fallback: keyword matching
+    financing_keywords = {
+        'shelf': ['shelf', 'prospectus', 'registration statement'],
+        'atm': ['atm', 'at-the-market', 'at the market'],
+        'closed': ['closes', 'closed', 'completes', 'completed', 'closing of'],
+        'announced': ['announces', 'proposes', 'intends to', 'plans to', 'seeks']
+    }
+    
+    most_recent_event = None
+    most_recent_days = None
+    
+    for item in news_items:
+        title_lower = (item.get('title', '') or '').lower()
+        ts = item.get('timestamp', 0)
+        
+        # Check if financing-related
+        is_financing = any(word in title_lower for word in 
+                          ['financing', 'placement', 'offering', 'capital raise', 'bought deal'])
+        if not is_financing:
+            continue
+        
+        # Determine stage and type
+        stage = None
+        fin_type = None
+        
+        if any(word in title_lower for word in financing_keywords['closed']):
+            stage = 'CLOSED'
+        elif any(word in title_lower for word in financing_keywords['announced']):
+            stage = 'ANNOUNCED'
+        
+        if any(word in title_lower for word in financing_keywords['shelf']):
+            fin_type = 'SHELF'
+        elif any(word in title_lower for word in financing_keywords['atm']):
+            fin_type = 'ATM'
+        
+        if stage:
+            # Calculate days ago
+            days_ago = None
+            if ts > 0:
+                try:
+                    if ts > 1e12:
+                        ts = ts / 1000
+                    news_date = datetime.datetime.fromtimestamp(ts)
+                    days_ago = (datetime.datetime.now() - news_date).days
+                except:
+                    pass
+            
+            if most_recent_days is None or (days_ago is not None and days_ago < most_recent_days):
+                most_recent_event = {'stage': stage, 'type': fin_type or 'PP', 'days_ago': days_ago}
+                most_recent_days = days_ago
+    
+    # Score based on most recent event
+    if most_recent_event:
+        stage = most_recent_event['stage']
+        fin_type = most_recent_event['type']
+        days_ago = most_recent_event.get('days_ago')
+        
+        if stage == 'CLOSED':
+            if days_ago is not None and days_ago <= 7:
+                result['score'] = 30.0
+                result['reasons'] = [f'Financing closed {days_ago}d ago', 'Runway extended']
+            else:
+                result['score'] = 20.0
+                result['reasons'] = ['Financing closed', 'Older event']
+        elif stage == 'ANNOUNCED':
+            if fin_type == 'ATM':
+                result['score'] = 85.0
+                result['reasons'] = ['Active ATM', 'Ongoing dilution']
+            elif fin_type == 'SHELF':
+                result['score'] = 80.0
+                result['reasons'] = ['Shelf filed', 'Dilution imminent']
+            else:
+                recency_factor = max(0, 30 - (days_ago or 90)) / 30.0 if days_ago is not None else 0.5
+                result['score'] = 60.0 + (25.0 * recency_factor)
+                result['reasons'] = ['Financing announced', 'Not yet closed']
+    else:
+        result['score'] = 0.0
+        result['reasons'] = ['No financing events detected']
+    
+    return result
+
+# ============================================================================
 # I) DISCOVERY EXCEPTION
 # ============================================================================
 
@@ -1088,7 +1320,7 @@ def check_discovery_exception(row, liq_metrics, alpha_score, data_confidence,
 # ============================================================================
 
 def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk, 
-                             alpha_score, macro_regime, discovery):
+                             alpha_score, macro_regime, discovery, tape_gate=None):
     """
     Final decision arbitration
     """
@@ -1108,6 +1340,36 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
     conf_score = data_conf['score']
     dil_score = dilution['score']
     sell_score = sell_risk['score']
+    
+    # Tape gate enforcement (if provided)
+    if tape_gate:
+        if not tape_gate.get('new_buys_allowed', True):
+            # Check if this is a buy action
+            current_pct = row.get('Pct_Portfolio', 0)
+            recommended_pct = row.get('Recommended_Pct', current_pct)
+            is_buy_action = recommended_pct > current_pct
+            
+            if is_buy_action:
+                decision['gates_failed'].append("🛑 Tape gate: New buys not allowed")
+                # Downgrade to HOLD or REDUCE based on strict mode
+                strict_mode = st.session_state.get('strict_mode', False)
+                if strict_mode and sell_score >= 30:
+                    decision['action'] = '🔴 REDUCE'
+                    decision['recommended_pct'] = current_pct * 0.5
+                else:
+                    decision['action'] = '⚪ HOLD'
+                    decision['recommended_pct'] = current_pct
+                decision['warnings'].append("Tape gate blocked new buy")
+                return decision
+        
+        # Apply throttle to positive deltas
+        throttle = tape_gate.get('throttle', 1.0)
+        if throttle < 1.0:
+            current_pct = row.get('Pct_Portfolio', 0)
+            if decision['recommended_pct'] > current_pct:
+                delta = decision['recommended_pct'] - current_pct
+                decision['recommended_pct'] = current_pct + (delta * throttle)
+                decision['warnings'].append(f"Tape throttle: {throttle:.2f}x applied")
     
     # Hard gates
     if not macro_regime.get('allow_new_buys', True):
@@ -1483,6 +1745,23 @@ elif macro_regime['regime'] == 'RISK-ON':
 else:
     st.info(f"📊 **NEUTRAL MODE** • {' | '.join(macro_regime['factors'])}")
 
+# Display Tape/Regime Gate
+if 'tape_gate' in st.session_state:
+    tape_gate = st.session_state.tape_gate
+    st.markdown("### 🚦 Tape / Regime Gate")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        dxy_reason = next((r for r in tape_gate['reasons'] if 'DXY' in r), 'DXY: Unknown')
+        st.caption(f"**{dxy_reason}**")
+    with col2:
+        vix_reason = next((r for r in tape_gate['reasons'] if 'VIX' in r), 'VIX: Unknown')
+        st.caption(f"**{vix_reason}**")
+    with col3:
+        buys_status = "✅ Yes" if tape_gate['new_buys_allowed'] else "❌ No"
+        st.caption(f"**New buys allowed? {buys_status}**")
+    if tape_gate['throttle'] < 1.0:
+        st.warning(f"⚠️ Throttle factor: {tape_gate['throttle']:.2f} (reduced position sizing)")
+
 # Analysis Button
 if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_width=True):
     progress = st.progress(0, text="Starting analysis...")
@@ -1523,13 +1802,62 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
             'discovery_hardness': 'NORMAL',
             'sell_sensitivity': 1.0
         }
+        gold_analysis = None
+        silver_analysis = None
     
-    # Fetch price data
+    # Calculate tape gate
+    tape_gate = calculate_tape_gate(
+        macro_regime,
+        st.session_state.get('gold_analysis') or gold_analysis,
+        st.session_state.get('silver_analysis') or silver_analysis
+    )
+    st.session_state.tape_gate = tape_gate
+    
+    # Check replay mode - skip network calls if enabled
+    replay_mode = st.session_state.get('replay_mode', False)
+    replay_pack = st.session_state.get('replay_pack')
+    
+    if replay_mode:
+        if not replay_pack:
+            st.error("⚠️ Replay mode enabled but no evidence pack loaded. Please load an evidence pack first.")
+            st.stop()
+        
+        # Load from evidence pack - zero network calls
+        st.info(f"🔄 REPLAY MODE — OFFLINE — DATA AS OF {replay_pack.get('created_at_utc', 'Unknown')}")
+        
+        # Load tape_gate from pack
+        if 'tape_gate' in replay_pack:
+            st.session_state.tape_gate = replay_pack['tape_gate']
+        
+        # Load results from pack (includes financing overhang)
+        if 'results' in replay_pack:
+            df = pd.DataFrame(replay_pack['results'])
+            news_cache = replay_pack.get('caches', {}).get('news_cache', {})
+            macro_regime = replay_pack.get('macro_regime', {})
+            alpha_breakdown_storage = replay_pack.get('caches', {}).get('alpha_breakdown_storage', {})
+            sell_triggers_storage = replay_pack.get('caches', {}).get('sell_triggers_storage', {})
+            dilution_factors_storage = replay_pack.get('caches', {}).get('dilution_factors_storage', {})
+            conf_breakdown_storage = replay_pack.get('caches', {}).get('conf_breakdown_storage', {})
+            
+            # Set session state
+            st.session_state.results = df
+            st.session_state.news_cache = news_cache
+            st.session_state.macro_regime = macro_regime
+            st.session_state.conf_breakdown_storage = conf_breakdown_storage
+            st.session_state.dilution_factors_storage = dilution_factors_storage
+            st.session_state.alpha_breakdown_storage = alpha_breakdown_storage
+            st.session_state.sell_triggers_storage = sell_triggers_storage
+            
+            progress.progress(100, text="✅ Replay complete!")
+            st.success("✅ World-class analysis complete!")
+            st.rerun()
+    
+    # Fetch price data (normal mode - network calls allowed)
     progress.progress(10, text="📊 Fetching market data...")
     
     hist_cache = {}
     for idx, row in df.iterrows():
-        if YFINANCE:
+        if YFINANCE and not replay_mode:
             try:
                 hist = yf.Ticker(row['Symbol']).history(period="2y")
                 if not hist.empty:
@@ -1639,6 +1967,18 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
         df.at[idx, 'Dilution_Verdict'] = dil['verdict']
         
         dilution_factors_storage[row['Symbol']] = dil['factors']
+    
+    # Calculate Financing Overhang
+    progress.progress(62, text="💰 Financing overhang analysis...")
+    
+    for idx, row in df.iterrows():
+        news = news_cache.get(row['Symbol'], [])
+        runway_months = row.get('Runway', 12.0)
+        
+        overhang = calculate_financing_overhang(news, row['Symbol'], runway_months)
+        
+        df.at[idx, 'Financing_Overhang_Score'] = overhang['score']
+        df.at[idx, 'Financing_Overhang_Reasons'] = overhang['reasons']
     
     # CRITICAL FIX: Calculate SMC BEFORE alpha scoring
     progress.progress(65, text="📈 Calculating SMC signals...")
@@ -1754,9 +2094,12 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
         
         discovery = (row['Discovery_Exception'], row['Discovery_Reason'])
         
+        # Get tape gate from session state
+        tape_gate = st.session_state.get('tape_gate')
+        
         decision = arbitrate_final_decision(
             row, liq_metrics, data_conf, dilution, sell_risk,
-            row['Alpha_Score'], macro_regime, discovery
+            row['Alpha_Score'], macro_regime, discovery, tape_gate
         )
         
         decisions.append(decision)
@@ -1764,6 +2107,31 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
     for k in ['action', 'confidence', 'recommended_pct', 'max_allowed_pct', 'reasoning', 
               'gates_passed', 'gates_failed', 'warnings']:
         df[k.title()] = [d[k] for d in decisions]
+    
+    # Post-process: Strict mode + Financing Overhang enforcement
+    strict_mode = st.session_state.get('strict_mode', False)
+    if strict_mode:
+        for idx, row in df.iterrows():
+            overhang_score = row.get('Financing_Overhang_Score', 0)
+            action = row.get('Action', '')
+            is_buy = 'BUY' in action or 'ADD' in action or 'STRONG BUY' in action
+            
+            if is_buy and overhang_score >= 80:
+                # Check if exception: PP_CLOSED <=7d AND runway >= 9 months
+                reasons = row.get('Financing_Overhang_Reasons', [])
+                has_recent_close = any('closed' in str(r).lower() and '7d' in str(r) for r in reasons)
+                runway_months = row.get('Runway', 0)
+                
+                if not (has_recent_close and runway_months >= 9):
+                    # Block the buy
+                    df.at[idx, 'Action'] = '⚪ HOLD'
+                    current_warnings = row.get('Warnings', [])
+                    if isinstance(current_warnings, list):
+                        current_warnings.append("STRICT: Financing overhang ≥80 blocks buy")
+                    else:
+                        current_warnings = ["STRICT: Financing overhang ≥80 blocks buy"]
+                    df.at[idx, 'Warnings'] = current_warnings
+                    df.at[idx, 'Recommended_Pct'] = row.get('Pct_Portfolio', 0)
     
     progress.progress(100, text="✅ Complete!")
 
@@ -1774,24 +2142,29 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
     validation = validate_data_invariants(df, alpha_models_storage, news_cache)
     st.session_state.validation = validation
 
-    if st.session_state.get('strict_mode', False):
+    if strict_mode:
         preset = get_risk_profile_preset(st.session_state.get('risk_profile', 'Balanced'))
         df, strict_downgrades = enforce_strict_mode(df, validation, st.session_state.get('strict_mode', False), st.session_state.get('risk_profile','Balanced'))
 
     # Save evidence pack for replay/debugging
     try:
         pack = create_evidence_pack(
+            df=df,
             portfolio_input=st.session_state.portfolio,
             cash=float(st.session_state.cash),
-            results_df=df,
-            news_cache=news_cache,
             macro_regime=macro_regime,
+            news_cache=news_cache,
+            alpha_breakdown_storage=alpha_breakdown_storage,
+            sell_triggers_storage=sell_triggers_storage,
+            dilution_factors_storage=dilution_factors_storage,
+            conf_breakdown_storage=conf_breakdown_storage,
             meta={
                 'version': VERSION,
                 'version_date': VERSION_DATE,
                 'risk_profile': st.session_state.get('risk_profile', 'Balanced'),
                 'strict_mode': bool(st.session_state.get('strict_mode', False))
-            }
+            },
+            tape_gate=st.session_state.get('tape_gate')
         )
         st.session_state.evidence_pack = pack
         save_evidence_pack(pack)
@@ -2121,6 +2494,15 @@ if 'results' in st.session_state:
         badge_html += f'<span class="badge-tactical">Conf: {row["Data_Confidence"]:.0f}%</span> '
         badge_html += f'<span class="badge-tactical">Dil: {row["Dilution_Risk_Score"]:.0f}/100</span> '
         
+        # Financing Overhang badge
+        overhang_score = row.get('Financing_Overhang_Score', 0)
+        if overhang_score >= 70:
+            badge_html += f'<span class="badge-l1">FinOverhang: {overhang_score:.0f}/100</span> '
+        elif overhang_score >= 40:
+            badge_html += f'<span class="badge-l2">FinOverhang: {overhang_score:.0f}/100</span> '
+        elif overhang_score > 0:
+            badge_html += f'<span class="badge-tactical">FinOverhang: {overhang_score:.0f}/100</span> '
+        
         if row.get('Insider_Buying_90d', False):
             badge_html += '<span class="badge-insider">INSIDER BUY</span> '
         
@@ -2141,6 +2523,20 @@ if 'results' in st.session_state:
         ticker_news = news_cache.get(row['Symbol'], [])
         news_quality, news_badge = calculate_news_quality(ticker_news)
         badge_html += f'<span class="{news_badge}">News: {news_quality}</span> '
+        
+        # Financing Overhang details (if significant)
+        overhang_score = row.get('Financing_Overhang_Score', 0)
+        overhang_reasons = row.get('Financing_Overhang_Reasons', [])
+        if overhang_score >= 40 and overhang_reasons:
+            reasons_text = ' | '.join(overhang_reasons[:2])
+            badge_html += f'<span class="badge-tactical">FinOverhang: {reasons_text}</span> '
+        
+        # Financing Overhang details (if significant)
+        overhang_score = row.get('Financing_Overhang_Score', 0)
+        overhang_reasons = row.get('Financing_Overhang_Reasons', [])
+        if overhang_score >= 40 and overhang_reasons:
+            reasons_text = ' | '.join(overhang_reasons[:2])
+            badge_html += f'<span class="badge-tactical">FinOverhang: {reasons_text}</span> '
         
         st.markdown(badge_html, unsafe_allow_html=True)
         
