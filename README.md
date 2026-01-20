@@ -22,9 +22,7 @@ The app will open in your browser at `http://localhost:8501`
 
 ```bash
 pytest -q
-```
-
-Or use the Makefile:
+```Or use the Makefile:
 ```bash
 make test
 ```
