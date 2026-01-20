@@ -286,25 +286,47 @@ def load_evidence_pack(path: Path) -> dict:
 
 def calculate_liquidity_metrics(ticker, hist_data, current_price, current_position_value, portfolio_size=PORTFOLIO_SIZE):
     """
-    Calculate liquidity metrics and tier classification
+    Calculate liquidity metrics and tier classification.
+    Returns UNKNOWN tier if volume data is missing or invalid (NaN/zeros).
     """
     result = {
-        'tier_code': 'L0',
-        'tier_name': 'Illiquid',
+        'tier_code': 'UNKNOWN',
+        'tier_name': 'Unknown Liquidity',
         'dollar_vol_20d': 0,
         'avg_vol_20d': 0,
-        'max_position_pct': 1.0,
+        'max_position_pct': 0.0,  # Block new buys by default for UNKNOWN
         'days_to_exit': 99,
-        'exit_flag': '⚠️ ILLIQUID'
+        'exit_flag': '❓ UNKNOWN',
+        'volume_valid': False,
+        'liquidity_reason': 'Volume data missing or invalid'
     }
     
     if hist_data.empty or len(hist_data) < 20:
+        result['liquidity_reason'] = 'Insufficient historical data (< 20 days)'
+        return result
+    
+    # Check if Volume column exists and has valid data
+    if 'Volume' not in hist_data.columns:
+        result['liquidity_reason'] = 'Volume column missing from historical data'
         return result
     
     try:
         recent = hist_data.tail(20)
-        avg_vol = recent['Volume'].mean()
+        # Check for NaN or all-zero volume
+        vol_series = recent['Volume']
+        if vol_series.isna().all() or (vol_series == 0).all():
+            result['liquidity_reason'] = 'Volume data is all NaN or zero'
+            return result
+        
+        # Calculate average volume, ignoring NaN and zeros
+        valid_vol = vol_series[vol_series > 0].dropna()
+        if len(valid_vol) == 0:
+            result['liquidity_reason'] = 'No valid (non-zero) volume data'
+            return result
+        
+        avg_vol = valid_vol.mean()
         result['avg_vol_20d'] = avg_vol
+        result['volume_valid'] = True
         
         # Dollar volume
         dollar_vol = avg_vol * current_price
@@ -315,30 +337,34 @@ def calculate_liquidity_metrics(ticker, hist_data, current_price, current_positi
             days_to_exit = current_position_value / (dollar_vol * 0.10)
             result['days_to_exit'] = min(days_to_exit, 99)
         
-        # Tier classification
+        # Tier classification (only if we have valid volume)
         if dollar_vol >= 500000:
             result['tier_code'] = 'L3'
             result['tier_name'] = 'Highly Liquid'
             result['max_position_pct'] = 10.0
             result['exit_flag'] = '✅ L3'
+            result['liquidity_reason'] = f'Dollar volume ${dollar_vol:,.0f}/day (L3)'
         elif dollar_vol >= 200000:
             result['tier_code'] = 'L2'
             result['tier_name'] = 'Liquid'
             result['max_position_pct'] = 7.5
             result['exit_flag'] = '🟢 L2'
+            result['liquidity_reason'] = f'Dollar volume ${dollar_vol:,.0f}/day (L2)'
         elif dollar_vol >= 50000:
             result['tier_code'] = 'L1'
             result['tier_name'] = 'Moderate'
             result['max_position_pct'] = 5.0
             result['exit_flag'] = '🟡 L1'
+            result['liquidity_reason'] = f'Dollar volume ${dollar_vol:,.0f}/day (L1)'
         else:
             result['tier_code'] = 'L0'
             result['tier_name'] = 'Illiquid'
             result['max_position_pct'] = 1.0
             result['exit_flag'] = '⚠️ L0'
+            result['liquidity_reason'] = f'Dollar volume ${dollar_vol:,.0f}/day (L0)'
     
-    except:
-        pass
+    except Exception as e:
+        result['liquidity_reason'] = f'Error calculating liquidity: {str(e)}'
     
     return result
 
@@ -1084,6 +1110,8 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
     financing_overhang = row.get('Financing_Overhang_Score', 0)
     
     # Liquidity veto
+    # Only force veto for L0 (confirmed illiquid)
+    # UNKNOWN blocks new buys but doesn't force sells (capital protection)
     if liq_tier == 'L0':
         decision['action'] = 'Avoid'
         decision['confidence'] = 'Medium'
@@ -1092,6 +1120,21 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
         decision['veto_model'] = 'Liquidity'
         decision['reasoning'].append(f"Liquidity veto: {liq_tier} tier")
         return decision
+    elif liq_tier == 'UNKNOWN':
+        # UNKNOWN liquidity: block new buys but don't force sells
+        current_pct = row.get('Pct_Portfolio', 0)
+        recommended_pct = row.get('Recommended_Pct', current_pct)
+        is_buy_action = recommended_pct > current_pct
+        
+        if is_buy_action:
+            decision['action'] = 'HOLD'
+            decision['confidence'] = 'Low'
+            decision['recommended_pct'] = current_pct
+            decision['primary_gating_reason'] = "Liquidity UNKNOWN: Blocking new buys (capital protection)"
+            decision['warnings'].append("Liquidity tier UNKNOWN - volume data missing/invalid")
+            # Don't set veto_applied=True for UNKNOWN - it's a caution, not a hard veto
+            return decision
+        # For sells/reduces, allow them to proceed (don't block based on UNKNOWN)
     
     # Dilution/Financing veto
     if dilution_score >= 80 or financing_overhang >= 80:

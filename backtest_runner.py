@@ -42,7 +42,8 @@ LIQUIDITY_BUY_LIMITS = {
     'L0': 0.0,      # No buys
     'L1': 0.25,    # 0.25% of portfolio per day
     'L2': 0.5,     # 0.5% of portfolio per day
-    'L3': 1.0      # 1.0% of portfolio per day
+    'L3': 1.0,     # 1.0% of portfolio per day
+    'UNKNOWN': 0.0  # No buys unless allow_leverage (capital protection)
 }
 
 def parse_args():
@@ -102,6 +103,12 @@ def load_or_fetch_price_data(symbol: str, start: str, end: str, data_dir: Path, 
     if cache_file.exists():
         try:
             hist = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            # Ensure index is DatetimeIndex
+            if not isinstance(hist.index, pd.DatetimeIndex):
+                hist.index = pd.to_datetime(hist.index)
+            # Ensure Volume column exists (yfinance typically includes it)
+            if 'Volume' not in hist.columns:
+                hist['Volume'] = 0.0
             return hist
         except Exception as e:
             print(f"Warning: Could not load cached data for {symbol}: {e}")
@@ -116,6 +123,12 @@ def load_or_fetch_price_data(symbol: str, start: str, end: str, data_dir: Path, 
         ticker = yf.Ticker(symbol)
         hist = ticker.history(start=start, end=end)
         if not hist.empty:
+            # Ensure index is DatetimeIndex
+            if not isinstance(hist.index, pd.DatetimeIndex):
+                hist.index = pd.to_datetime(hist.index)
+            # Ensure Volume column exists
+            if 'Volume' not in hist.columns:
+                hist['Volume'] = 0.0
             # Save to cache
             data_dir.mkdir(parents=True, exist_ok=True)
             hist.to_csv(cache_file)
@@ -141,6 +154,9 @@ def simulate_day(
     """
     Simulate one trading day and return updated portfolio, cash, trades, and daily stats
     """
+    # Convert date string to Timestamp for consistent comparisons
+    date_ts = pd.Timestamp(date)
+    
     total_value = portfolio['Market_Value'].sum() + cash
     trades = []
     num_buys = 0
@@ -173,12 +189,16 @@ def simulate_day(
         if hist.empty:
             continue
         
+        # Ensure hist index is DatetimeIndex
+        if not isinstance(hist.index, pd.DatetimeIndex):
+            hist.index = pd.to_datetime(hist.index)
+        
         # Get current price (use closest available date if exact date not found)
-        if date in hist.index:
-            current_price = hist.loc[date, 'Close']
+        if date_ts in hist.index:
+            current_price = hist.loc[date_ts, 'Close']
         else:
             # Find closest date before or on target date
-            hist_before = hist[hist.index <= date]
+            hist_before = hist[hist.index <= date_ts]
             if not hist_before.empty:
                 current_price = hist_before['Close'].iloc[-1]
             else:
@@ -194,12 +214,14 @@ def simulate_day(
         
         # Calculate metrics (simplified - using cached data)
         # Use historical slice up to current date
-        hist_slice = hist[hist.index <= date] if date in hist.index else hist
+        hist_slice = hist[hist.index <= date_ts]
         if hist_slice.empty:
             hist_slice = hist
         
         liq = calculate_liquidity_metrics(symbol, hist_slice, current_price, row_dict['Market_Value'], total_value)
-        liq_metrics = {'tier_code': liq.get('tier_code', 'L0'), 'max_position_pct': liq.get('max_position_pct', 1.0)}
+        liq_tier = liq.get('tier_code', 'UNKNOWN')
+        liq_reason = liq.get('liquidity_reason', 'Unknown')
+        liq_metrics = {'tier_code': liq_tier, 'max_position_pct': liq.get('max_position_pct', 0.0)}
         
         # Data confidence
         fund_dict = info.get('fundamentals', {})
@@ -208,7 +230,6 @@ def simulate_day(
         
         # Calculate drawdown for dilution risk
         if len(hist) >= 90:
-            hist_slice = hist[hist.index <= date] if date in hist.index else hist
             if len(hist_slice) >= 90:
                 high_90d = hist_slice['High'].tail(90).max()
                 drawdown_90d = ((current_price - high_90d) / high_90d * 100) if high_90d > 0 else 0
@@ -271,12 +292,19 @@ def simulate_day(
         trade_dollars = target_value - current_value
         
         # Liquidity constraint
-        liq_tier = liq.get('tier_code', 'L0')
         daily_buy_limit_pct = LIQUIDITY_BUY_LIMITS.get(liq_tier, 0.0)
         
         if trade_dollars > 0:  # Buy
             if liq_tier == 'L0':
                 trade_dollars = 0  # No buys for L0
+            elif liq_tier == 'UNKNOWN':
+                # Block new buys for UNKNOWN unless allow_leverage (capital protection)
+                if not allow_leverage:
+                    trade_dollars = 0
+                else:
+                    # Allow small buys with leverage enabled (conservative)
+                    max_buy_dollars = (0.1 / 100.0) * total_value  # 0.1% max for UNKNOWN
+                    trade_dollars = min(trade_dollars, max_buy_dollars)
             else:
                 max_buy_dollars = (daily_buy_limit_pct / 100.0) * total_value
                 trade_dollars = min(trade_dollars, max_buy_dollars)
@@ -298,6 +326,15 @@ def simulate_day(
                     'dollars': trade_dollars,
                     'price': current_price,
                     'slippage': slippage,
+                    'slippage_bps': slippage_bps,
+                    'action': decision.get('action', 'Buy'),
+                    'confidence': decision.get('confidence', 'Medium'),
+                    'veto_applied': decision.get('veto_applied', False),
+                    'veto_model': decision.get('veto_model', ''),
+                    'veto_reason': decision.get('primary_gating_reason', '') if decision.get('veto_applied', False) else '',
+                    'tape_gate_allowed': tape_gate.get('new_buys_allowed', True),
+                    'liquidity_tier': liq_tier,
+                    'liquidity_reason': liq_reason,
                     'reason': decision.get('primary_gating_reason', 'Alpha signal')
                 })
                 
@@ -324,6 +361,15 @@ def simulate_day(
                 'dollars': actual_trade,
                 'price': current_price,
                 'slippage': slippage,
+                'slippage_bps': slippage_bps,
+                'action': decision.get('action', 'Sell'),
+                'confidence': decision.get('confidence', 'Medium'),
+                'veto_applied': decision.get('veto_applied', False),
+                'veto_model': decision.get('veto_model', ''),
+                'veto_reason': decision.get('primary_gating_reason', '') if decision.get('veto_applied', False) else '',
+                'tape_gate_allowed': tape_gate.get('new_buys_allowed', True),
+                'liquidity_tier': liq_tier,
+                'liquidity_reason': liq_reason,
                 'reason': decision.get('primary_gating_reason', 'Risk signal')
             })
             
@@ -423,12 +469,16 @@ def run_backtest(args):
     # Initialize portfolio prices on first day
     if trading_days:
         first_day = trading_days[0]
+        first_day_ts = pd.Timestamp(first_day)
         for idx, row in portfolio.iterrows():
             symbol = row['Symbol']
             if symbol in hist_cache:
                 hist = hist_cache[symbol]
+                # Ensure index is DatetimeIndex
+                if not isinstance(hist.index, pd.DatetimeIndex):
+                    hist.index = pd.to_datetime(hist.index)
                 # Find closest date to first_day
-                hist_before = hist[hist.index <= first_day]
+                hist_before = hist[hist.index <= first_day_ts]
                 if not hist_before.empty:
                     first_price = hist_before['Close'].iloc[-1]
                     portfolio.at[idx, 'Price'] = first_price
