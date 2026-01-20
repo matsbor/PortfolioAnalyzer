@@ -17,79 +17,9 @@ from datetime import datetime, timedelta
 import yfinance as yf
 from typing import Dict, List, Tuple, Optional
 
-# Import decision logic from main app
-# Note: We import functions but avoid importing Streamlit-dependent code
+# Import decision logic from core module (import-safe, no Streamlit)
 try:
-    # Mock streamlit to avoid import errors
-    class MockSessionState(dict):
-        """Dict-like session state that supports attribute access"""
-        def __init__(self):
-            super().__init__()
-            self.provenance_storage = {}
-            self.network_calls_count = 0
-            self.network_calls_log = []
-            self.yfinance_available = True
-        
-        def __getattr__(self, key):
-            return self.get(key)
-        
-        def __setattr__(self, key, value):
-            if key in ['provenance_storage', 'network_calls_count', 'network_calls_log', 'yfinance_available']:
-                super().__setattr__(key, value)
-            else:
-                self[key] = value
-    
-    class MockStreamlit:
-        class sidebar:
-            @staticmethod
-            def toggle(*args, **kwargs):
-                return False
-            
-            @staticmethod
-            def selectbox(*args, **kwargs):
-                return None
-            
-            @staticmethod
-            def button(*args, **kwargs):
-                return False
-        
-        @staticmethod
-        def cache_data(ttl=None):
-            def decorator(func):
-                return func
-            return decorator
-        
-        @staticmethod
-        def set_page_config(*args, **kwargs):
-            pass
-        
-        @staticmethod
-        def error(*args, **kwargs):
-            pass
-        
-        @staticmethod
-        def warning(*args, **kwargs):
-            pass
-        
-        @staticmethod
-        def info(*args, **kwargs):
-            pass
-        
-        @staticmethod
-        def success(*args, **kwargs):
-            pass
-        
-        @staticmethod
-        def markdown(*args, **kwargs):
-            pass
-    
-    mock_st = MockStreamlit()
-    mock_st.session_state = MockSessionState()
-    sys.modules['streamlit'] = mock_st
-    import streamlit as st
-    st.session_state = mock_st.session_state
-    
-    from alpha_miner_institutional_v2 import (
+    from alpha_miner_core import (
         calculate_alpha_models,
         calculate_sell_risk,
         calculate_liquidity_metrics,
@@ -103,8 +33,8 @@ try:
         calculate_tape_gate
     )
 except ImportError as e:
-    print(f"Error importing from alpha_miner_institutional_v2: {e}")
-    print("Make sure the main app file is in the same directory.")
+    print(f"Error importing from alpha_miner_core: {e}")
+    print("Make sure alpha_miner_core.py is in the same directory.")
     sys.exit(1)
 
 # Liquidity constraints for backtesting
@@ -124,7 +54,7 @@ def parse_args():
     parser.add_argument('--rebalance', action='store_true', default=True, help='Enable rebalancing (default: True)')
     parser.add_argument('--allow_leverage', action='store_true', help='Allow leverage (default: False)')
     parser.add_argument('--slippage_bps', type=int, default=20, help='Slippage in basis points (default: 20)')
-    parser.add_argument('--max_position_pct', type=float, default=10.0, help='Max position % (default: 10.0)')
+    parser.add_argument('--max_position_pct', type=float, default=10.0, help='Max position percent (default: 10.0)')
     parser.add_argument('--data_dir', type=str, default='./.backtest_cache', help='Data cache directory')
     parser.add_argument('--offline', action='store_true', help='Offline mode (no network calls)')
     parser.add_argument('--strict_mode', action='store_true', default=True, help='Strict mode (default: True)')
@@ -308,15 +238,16 @@ def simulate_day(
         alpha_result = calculate_alpha_models(row_dict, hist_slice, benchmark)
         alpha_score = alpha_result.get('alpha_score', 50)
         
-        # Financing overhang
-        overhang = calculate_financing_overhang(news, symbol, row_dict.get('Runway', 12.0))
+        # Financing overhang (pass False for institutional_v3_available in backtest)
+        overhang = calculate_financing_overhang(news, symbol, row_dict.get('Runway', 12.0), institutional_v3_available=False)
         row_dict['Financing_Overhang_Score'] = overhang['score']
         
         # Final decision
         discovery = (False, '')
         decision = arbitrate_final_decision(
             row_dict, liq_metrics, data_conf, dilution, sell_risk,
-            alpha_score, macro_regime, discovery, tape_gate
+            alpha_score, macro_regime, discovery, tape_gate,
+            strict_mode=strict_mode
         )
         
         # Strict Provenance Mode check (simplified - assume data is available in backtest)

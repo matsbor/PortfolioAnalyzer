@@ -11,11 +11,20 @@ import pandas as pd
 # This only works if your module import does NOT immediately run Streamlit UI at import-time.
 # If it does, we’ll refactor in Step 2 below.
 
-from alpha_miner_institutional_v2 import (
+from alpha_miner_core import (
     validate_data_invariants,
     enforce_strict_mode,
     get_risk_profile_preset,
+    arbitrate_final_decision,
+    calculate_financing_overhang,
 )
+
+def test_import_core_is_safe():
+    """Test that importing alpha_miner_core doesn't execute Streamlit UI"""
+    import alpha_miner_core
+    # If we get here without errors, import was safe
+    assert hasattr(alpha_miner_core, 'MODEL_ROLES')
+    assert hasattr(alpha_miner_core, 'arbitrate_final_decision')
 
 def _sample_df():
     return pd.DataFrame([
@@ -42,11 +51,8 @@ def test_enforce_strict_mode_does_not_crash():
     validation = validate_data_invariants(df, news_cache)
     preset = get_risk_profile_preset("Defensive")
 
-    # Some versions name this param "risk_profile" or expect the preset
-    try:
-        df2 = enforce_strict_mode(df.copy(), validation, preset, "Defensive")
-    except TypeError:
-        df2 = enforce_strict_mode(df.copy(), validation, preset)
+    # enforce_strict_mode signature: (df, validation, risk_profile, strict_mode)
+    df2 = enforce_strict_mode(df.copy(), validation, "Defensive", strict_mode=True)
 
     assert len(df2) == len(df)
 
@@ -79,18 +85,15 @@ def test_quick_analysis_replay_mode():
     """Test quick analysis runs in replay mode without network calls"""
     # This test verifies that quick analysis logic exists and can handle replay mode
     # Actual execution test would require Streamlit session state mocking
-    from alpha_miner_institutional_v2 import calculate_financing_overhang
     
     # Test financing overhang with empty news (should not crash)
-    result = calculate_financing_overhang([], 'TEST', 12.0)
+    result = calculate_financing_overhang([], 'TEST', 12.0, institutional_v3_available=False)
     assert isinstance(result, dict)
     assert 'score' in result
     assert 'reasons' in result
 
 def test_veto_overrides_alpha():
     """Test that veto logic overrides alpha recommendations"""
-    from alpha_miner_institutional_v2 import arbitrate_final_decision
-    
     # Create a row that would get BUY from alpha but veto from risk
     row = {
         'Pct_Portfolio': 5.0,
@@ -110,7 +113,7 @@ def test_veto_overrides_alpha():
     macro_regime = {'allow_new_buys': True, 'throttle_factor': 1.0}
     discovery = (False, '')
     
-    decision = arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk, 90, macro_regime, discovery)
+    decision = arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk, 90, macro_regime, discovery, strict_mode=False)
     
     # Should be vetoed to Avoid
     assert decision['action'] == 'Avoid'
