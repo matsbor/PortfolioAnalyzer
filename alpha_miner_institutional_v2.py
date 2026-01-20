@@ -73,8 +73,37 @@ except:
     st.session_state.yfinance_available = False
     st.error("⚠️ yfinance not installed. Run: pip install yfinance")
 
+# MODEL GOVERNANCE - Define model roles and caps
+MODEL_ROLES = {
+    'Alpha': {
+        'models': ['M1_Momentum', 'M2_Value', 'M3_Relative', 'M4_Volatility', 'M5_Benchmark', 'M6_Discovery', 'M7_SMC'],
+        'role': 'recommend',
+        'weight_cap': 100.0
+    },
+    'Risk': {
+        'models': ['Sell_Risk', 'Data_Confidence'],
+        'role': 'veto',
+        'threshold': 60.0
+    },
+    'Capital_Structure': {
+        'models': ['Dilution_Risk', 'Financing_Overhang'],
+        'role': 'veto',
+        'threshold': 80.0
+    },
+    'Liquidity': {
+        'models': ['Liquidity_Tier', 'Days_To_Exit'],
+        'role': 'veto',
+        'threshold': 'L0'
+    },
+    'Regime': {
+        'models': ['Tape_Gate', 'Metal_Regime'],
+        'role': 'throttle',
+        'threshold': None
+    }
+}
+
 # VERSION TRACKING
-VERSION = "2.1-FIXED"
+VERSION = "2.2-PRODUCTION"
 VERSION_DATE = "2026-01-16"
 VERSION_FEATURES = [
     "✅ SMC integrated into alpha scoring",
@@ -83,7 +112,10 @@ VERSION_FEATURES = [
     "✅ Market buzz proxy integration",
     "✅ Portfolio orchestration & ranking",
     "✅ Enhanced discovery exception",
-    "✅ Fixed arbitration wiring"
+    "✅ Fixed arbitration wiring",
+    "✅ Model governance with veto logic",
+    "✅ Confidence-based decision framing",
+    "✅ Watchlist & Quick Analysis"
 ]
 
 st.set_page_config(page_title="Alpha Miner Pro", layout="wide", initial_sidebar_state="expanded")
@@ -1325,17 +1357,21 @@ def check_discovery_exception(row, liq_metrics, alpha_score, data_confidence,
 def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk, 
                              alpha_score, macro_regime, discovery, tape_gate=None):
     """
-    Final decision arbitration
+    Final decision arbitration with model hierarchy and veto logic.
+    Model roles: Alpha (recommends), Risk/Liquidity/Overhang (may veto).
     """
     decision = {
-        'action': '⚪ HOLD',
-        'confidence': 50,
+        'action': 'HOLD',
+        'confidence': 'Low',
         'recommended_pct': row.get('Pct_Portfolio', 0),
         'max_allowed_pct': 5.0,
+        'primary_gating_reason': '',
         'reasoning': [],
         'gates_passed': [],
         'gates_failed': [],
-        'warnings': []
+        'warnings': [],
+        'veto_applied': False,
+        'veto_model': None
     }
     
     # Gate checks
@@ -1382,17 +1418,25 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
             decision['recommended_pct'] = row.get('Pct_Portfolio', 0) * 0.5
         return decision
     
+    # Model hierarchy: Risk models can VETO
     if sell_score >= 60:
-        decision['action'] = '🚨 SELL NOW'
-        decision['confidence'] = 90
+        decision['action'] = 'Avoid'
+        decision['confidence'] = 'High'
         decision['recommended_pct'] = 0
         decision['reasoning'].extend(sell_risk['hard_triggers'])
         decision['gates_failed'].append(f"🔴 Sell risk {sell_score}/100 CRITICAL")
+        decision['primary_gating_reason'] = f"Risk model veto: Sell risk {sell_score}/100 exceeds critical threshold"
+        decision['veto_applied'] = True
+        decision['veto_model'] = 'Risk'
         return decision
     
     if conf_score < 40:
         decision['gates_failed'].append(f"⚠️ Data confidence {conf_score}/100 too low")
-        decision['action'] = '⚪ HOLD'
+        decision['action'] = 'Avoid'
+        decision['confidence'] = 'Low'
+        decision['primary_gating_reason'] = f"Data confidence {conf_score}/100 too low for reliable analysis"
+        decision['veto_applied'] = True
+        decision['veto_model'] = 'Risk'
         return decision
     
     # Size caps
@@ -1412,36 +1456,74 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
     # Decision logic
     current_pct = row.get('Pct_Portfolio', 0)
     
+    # Additional risk veto checks (Dilution, Liquidity)
+    dilution_score = dilution.get('score', 50)
+    financing_overhang = row.get('Financing_Overhang_Score', 0)
+    
+    # Liquidity veto
+    if liq_tier == 'L0':
+        decision['action'] = 'Avoid'
+        decision['confidence'] = 'Medium'
+        decision['primary_gating_reason'] = "Liquidity model veto: L0 tier (illiquid)"
+        decision['veto_applied'] = True
+        decision['veto_model'] = 'Liquidity'
+        decision['reasoning'].append(f"Liquidity veto: {liq_tier} tier")
+        return decision
+    
+    # Dilution/Financing veto
+    if dilution_score >= 80 or financing_overhang >= 80:
+        decision['action'] = 'Avoid'
+        decision['confidence'] = 'High'
+        veto_reason = f"Capital structure veto: "
+        if dilution_score >= 80:
+            veto_reason += f"Dilution risk {dilution_score}/100"
+        if financing_overhang >= 80:
+            if dilution_score >= 80:
+                veto_reason += f" + Financing overhang {financing_overhang}/100"
+            else:
+                veto_reason += f"Financing overhang {financing_overhang}/100"
+        decision['primary_gating_reason'] = veto_reason
+        decision['veto_applied'] = True
+        decision['veto_model'] = 'Capital Structure'
+        decision['reasoning'].append(veto_reason)
+        return decision
+    
+    # Alpha model recommendations (only if not vetoed)
     if sell_score >= 40:
-        decision['action'] = '🔴 REDUCE'
-        decision['confidence'] = 75
+        decision['action'] = 'Avoid'
+        decision['confidence'] = 'High'
         decision['recommended_pct'] = current_pct * 0.5
         decision['reasoning'].extend(sell_risk['soft_triggers'][:2])
+        decision['primary_gating_reason'] = f"Risk signals: Sell risk {sell_score}/100"
     
     elif sell_score >= 20:
-        decision['action'] = '🟡 TRIM'
-        decision['confidence'] = 60
+        decision['action'] = 'Avoid'
+        decision['confidence'] = 'Medium'
         decision['recommended_pct'] = current_pct * 0.8
+        decision['primary_gating_reason'] = f"Elevated sell risk: {sell_score}/100"
     
     elif alpha_score >= 75 and current_pct < base_max:
         if alpha_score >= 85:
-            decision['action'] = '🟢 STRONG BUY'
-            decision['confidence'] = 90
+            decision['action'] = 'Buy'
+            decision['confidence'] = 'High'
         else:
-            decision['action'] = '🟢 BUY'
-            decision['confidence'] = 80
+            decision['action'] = 'Buy'
+            decision['confidence'] = 'Medium'
         
         decision['recommended_pct'] = min(base_max, current_pct + 2.0)
+        decision['primary_gating_reason'] = f"Alpha model: {alpha_score:.0f}/100"
     
     elif alpha_score >= 60 and current_pct < base_max * 0.8:
-        decision['action'] = '🔵 ADD'
-        decision['confidence'] = 70
+        decision['action'] = 'Buy'
+        decision['confidence'] = 'Medium'
         decision['recommended_pct'] = min(base_max * 0.8, current_pct + 1.0)
+        decision['primary_gating_reason'] = f"Alpha model: {alpha_score:.0f}/100"
     
     else:
-        decision['action'] = '⚪ HOLD'
-        decision['confidence'] = 60
+        decision['action'] = 'HOLD'
+        decision['confidence'] = 'Low'
         decision['recommended_pct'] = current_pct
+        decision['primary_gating_reason'] = f"Insufficient alpha signal: {alpha_score:.0f}/100"
     
     decision['reasoning'].append(f"Alpha: {alpha_score:.0f}/100")
     decision['gates_passed'].append(f"✅ Liquidity: {liq_tier}")
@@ -1460,7 +1542,7 @@ def get_fundamentals_with_tracking(ticker):
         'cash': 10.0,
         'burn': 1.0,
         'burn_source': 'default',
-        'stage': 'Explorer',
+        'stage': 'Explorer (Inferred)',
         'metal': 'Unknown',
         'country': 'Unknown',
         'info_dict': {},
@@ -1499,18 +1581,24 @@ def get_fundamentals_with_tracking(ticker):
         
         # Stage
         revenue = info.get('totalRevenue', 0)
-        if revenue:
-            result['stage'] = 'Producer' if revenue > 10_000_000 else 'Developer'
+        if revenue and revenue > 10_000_000:
+            result['stage'] = 'Producer'
             result['inferred_flags']['stage_inferred'] = False
         else:
             assets = info.get('totalAssets', 0)
-            result['stage'] = 'Developer' if assets > 50_000_000 else 'Explorer'
+            if assets > 50_000_000:
+                result['stage'] = 'Developer (Inferred)'
+            else:
+                result['stage'] = 'Explorer (Inferred)'
+            result['inferred_flags']['stage_inferred'] = True
         
         # Country
         if info.get('country'):
             result['country'] = info['country']
+        else:
+            result['country'] = 'Unknown'
         
-        # Metal
+        # Metal (label as inferred if inferred)
         desc = info.get('longBusinessSummary', '').lower()
         if 'silver' in desc:
             result['metal'] = 'Silver'
@@ -1521,6 +1609,18 @@ def get_fundamentals_with_tracking(ticker):
         elif 'copper' in desc:
             result['metal'] = 'Copper'
             result['inferred_flags']['metal_inferred'] = False
+        else:
+            # Check name for inference
+            name_lower = info.get('longName', '').lower()
+            if 'gold' in name_lower or 'aurora' in name_lower:
+                result['metal'] = 'Gold (Inferred)'
+                result['inferred_flags']['metal_inferred'] = True
+            elif 'silver' in name_lower:
+                result['metal'] = 'Silver (Inferred)'
+                result['inferred_flags']['metal_inferred'] = True
+            else:
+                result['metal'] = 'Unknown'
+                result['inferred_flags']['metal_inferred'] = True
     
     except:
         pass
@@ -1716,6 +1816,58 @@ with st.sidebar:
     st.session_state.disable_inferred_fundamentals = disable_inferred
     
     st.markdown("---")
+    
+    # Watchlist feature
+    st.markdown("### 📋 Watchlist")
+    WATCHLIST_FILE = Path.home() / '.alpha_miner_watchlist.json'
+    
+    # Initialize watchlist in session state
+    if 'watchlist' not in st.session_state:
+        if WATCHLIST_FILE.exists():
+            try:
+                with open(WATCHLIST_FILE, 'r') as f:
+                    st.session_state.watchlist = json.load(f)
+            except:
+                st.session_state.watchlist = []
+        else:
+            st.session_state.watchlist = []
+    
+    watchlist_col1, watchlist_col2 = st.columns([3, 1])
+    with watchlist_col1:
+        new_symbol = st.text_input("Add symbol to watchlist", key="watchlist_input", placeholder="e.g., AGXPF")
+    with watchlist_col2:
+        if st.button("Add", key="watchlist_add"):
+            if new_symbol:
+                symbol = new_symbol.strip().upper()
+                if symbol and symbol not in st.session_state.watchlist:
+                    st.session_state.watchlist.append(symbol)
+                    try:
+                        with open(WATCHLIST_FILE, 'w') as f:
+                            json.dump(st.session_state.watchlist, f)
+                        st.success(f"Added {symbol} to watchlist")
+                        st.rerun()
+                    except:
+                        st.warning(f"Could not save watchlist, but {symbol} added to session")
+    
+    if st.session_state.watchlist:
+        st.caption(f"Watching: {', '.join(st.session_state.watchlist)}")
+        for sym in st.session_state.watchlist[:]:
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.text(sym)
+            with col2:
+                if st.button("Remove", key=f"remove_{sym}"):
+                    st.session_state.watchlist.remove(sym)
+                    try:
+                        with open(WATCHLIST_FILE, 'w') as f:
+                            json.dump(st.session_state.watchlist, f)
+                    except:
+                        pass
+                    st.rerun()
+    else:
+        st.caption("No symbols in watchlist")
+    
+    st.markdown("---")
 
     st.header("📊 Portfolio")
     port_size = st.number_input("Portfolio Size", value=PORTFOLIO_SIZE, step=10000)
@@ -1844,6 +1996,105 @@ if 'tape_gate' in st.session_state:
         st.caption(f"**New buys allowed? {buys_status}**")
     if tape_gate['throttle'] < 1.0:
         st.warning(f"⚠️ Throttle factor: {tape_gate['throttle']:.2f} (reduced position sizing)")
+
+# Quick Analysis for Watchlist
+if st.session_state.get('watchlist'):
+    st.markdown("---")
+    st.markdown("### 🔍 Quick Analysis (Watchlist)")
+    st.info("**Exploratory analysis — not a recommendation**")
+    
+    if st.button("🚀 Run Quick Analysis on Watchlist", type="secondary", use_container_width=True):
+        import traceback
+        try:
+            watchlist_symbols = st.session_state.get('watchlist', [])
+            if not watchlist_symbols:
+                st.warning("Watchlist is empty")
+            else:
+                quick_results = []
+                
+                # Get macro regime (needed for tape gate)
+                macro_regime = calculate_macro_regime()
+                
+                # Calculate tape gate
+                gold_analysis = st.session_state.get('gold_analysis')
+                silver_analysis = st.session_state.get('silver_analysis')
+                tape_gate = calculate_tape_gate(macro_regime, gold_analysis, silver_analysis)
+                
+                for symbol in watchlist_symbols:
+                    result = {
+                        'Symbol': symbol,
+                        'Financing_Overhang_Score': 0,
+                        'Financing_Overhang_Reasons': [],
+                        'Dilution_Risk_Score': 0,
+                        'Liquidity_Tier': 'Unknown',
+                        'Tape_Gate_Status': 'Unknown',
+                        'Catalyst_Detected': False
+                    }
+                    
+                    # Get news (skip network if replay mode)
+                    replay_mode = st.session_state.get('replay_mode', False)
+                    news_cache = st.session_state.get('news_cache', {})
+                    
+                    if replay_mode and news_cache:
+                        news = news_cache.get(symbol, [])
+                    else:
+                        if YFINANCE and not replay_mode:
+                            news = get_news_for_ticker(symbol)
+                        else:
+                            news = []
+                    
+                    # Calculate financing overhang
+                    overhang = calculate_financing_overhang(news, symbol, 12.0)
+                    result['Financing_Overhang_Score'] = overhang['score']
+                    result['Financing_Overhang_Reasons'] = overhang['reasons']
+                    
+                    # Calculate dilution risk (simplified - no full row data)
+                    runway_months = 12.0  # Default assumption
+                    dilution = calculate_dilution_risk(
+                        runway_months, 'Explorer', 0, news, True, True, False
+                    )
+                    result['Dilution_Risk_Score'] = dilution['score']
+                    
+                    # Get liquidity (simplified)
+                    if YFINANCE and not replay_mode:
+                        try:
+                            hist = yf.Ticker(symbol).history(period="1mo")
+                            if not hist.empty:
+                                price = hist['Close'].iloc[-1]
+                                volume = hist['Volume'].mean()
+                                mv = price * volume * 20  # Approximate 20-day dollar volume
+                                liq = calculate_liquidity_metrics(symbol, hist, price, mv, 100000)
+                                result['Liquidity_Tier'] = liq.get('tier_code', 'L0')
+                        except:
+                            result['Liquidity_Tier'] = 'Unknown'
+                    
+                    # Tape gate status
+                    result['Tape_Gate_Status'] = "New buys allowed" if tape_gate.get('new_buys_allowed', True) else "New buys blocked"
+                    
+                    # Catalyst detection (simplified - check financing events)
+                    if overhang['reasons']:
+                        catalyst_keywords = ['closed', 'atm', 'shelf', 'announced']
+                        if any(kw in str(r).lower() for r in overhang['reasons'] for kw in catalyst_keywords):
+                            result['Catalyst_Detected'] = True
+                    
+                    quick_results.append(result)
+                
+                # Store results
+                st.session_state.quick_analysis_results = quick_results
+                st.success(f"Quick analysis complete for {len(quick_results)} symbol(s)")
+                st.rerun()
+        
+        except Exception as e:
+            st.error(f"Quick analysis failed: {type(e).__name__}: {str(e)}")
+            with st.expander("Technical details", expanded=False):
+                st.code(traceback.format_exc(), language='python')
+    
+    # Display quick analysis results
+    if 'quick_analysis_results' in st.session_state:
+        results = st.session_state.quick_analysis_results
+        if results:
+            results_df = pd.DataFrame(results)
+            st.dataframe(results_df, use_container_width=True, hide_index=True)
 
 # Analysis Button
 if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_width=True):
@@ -2141,7 +2392,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
             
             if conf < 50:
                 df.at[idx, 'Sleeve'] = 'GAMBLING'
-            elif row['stage'] in ['Producer', 'Developer'] and daily_vol >= 200000 and conf >= 80:
+            elif row['stage'] in ['Producer', 'Developer', 'Developer (Inferred)'] and daily_vol >= 200000 and conf >= 80:
                 df.at[idx, 'Sleeve'] = 'CORE'
             else:
                 df.at[idx, 'Sleeve'] = 'TACTICAL'
@@ -2191,8 +2442,8 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
             decisions.append(decision)
         
         for k in ['action', 'confidence', 'recommended_pct', 'max_allowed_pct', 'reasoning', 
-                  'gates_passed', 'gates_failed', 'warnings']:
-            df[k.title()] = [d[k] for d in decisions]
+                  'gates_passed', 'gates_failed', 'warnings', 'primary_gating_reason', 'veto_applied', 'veto_model']:
+            df[k.title()] = [d.get(k, '') for d in decisions]
         
         # Post-process: Strict mode + Financing Overhang enforcement
         strict_mode = st.session_state.get('strict_mode', False)
@@ -2200,7 +2451,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
             for idx, row in df.iterrows():
                 overhang_score = row.get('Financing_Overhang_Score', 0)
                 action = row.get('Action', '')
-                is_buy = 'BUY' in action or 'ADD' in action or 'STRONG BUY' in action
+                is_buy = action == 'Buy'
                 
                 if is_buy and overhang_score >= 80:
                     # Check if exception: PP_CLOSED <=7d AND runway >= 9 months
@@ -2210,14 +2461,51 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
                     
                     if not (has_recent_close and runway_months >= 9):
                         # Block the buy
-                        df.at[idx, 'Action'] = '⚪ HOLD'
+                        df.at[idx, 'Action'] = 'Avoid'
+                        df.at[idx, 'Confidence'] = 'High'
                         current_warnings = row.get('Warnings', [])
                         if isinstance(current_warnings, list):
                             current_warnings.append("STRICT: Financing overhang ≥80 blocks buy")
                         else:
                             current_warnings = ["STRICT: Financing overhang ≥80 blocks buy"]
                         df.at[idx, 'Warnings'] = current_warnings
+                        df.at[idx, 'Primary_Gating_Reason'] = "STRICT MODE: Financing overhang ≥80 blocks buy"
                         df.at[idx, 'Recommended_Pct'] = row.get('Pct_Portfolio', 0)
+                        df.at[idx, 'Veto_Applied'] = True
+                        df.at[idx, 'Veto_Model'] = 'Capital Structure'
+        
+        # Calculate Recommendation Stability indicator
+        for idx, row in df.iterrows():
+            veto_count = 0
+            near_threshold_count = 0
+            
+            # Check if vetoes are near thresholds
+            sell_risk = row.get('Sell_Risk_Score', 0)
+            if sell_risk >= 50 and sell_risk < 60:
+                near_threshold_count += 1
+            
+            dilution = row.get('Dilution_Risk_Score', 0)
+            if dilution >= 70 and dilution < 80:
+                near_threshold_count += 1
+            
+            overhang = row.get('Financing_Overhang_Score', 0)
+            if overhang >= 70 and overhang < 80:
+                near_threshold_count += 1
+            
+            if row.get('Veto_Applied', False):
+                veto_count = 1
+            
+            # Determine stability
+            if veto_count > 0:
+                stability = 'Breaks'
+            elif near_threshold_count >= 2:
+                stability = 'Fragile'
+            elif near_threshold_count >= 1:
+                stability = 'Fragile'
+            else:
+                stability = 'Stable'
+            
+            df.at[idx, 'Recommendation_Stability'] = stability
         
         progress.progress(100, text="✅ Complete!")
 
@@ -2324,6 +2612,8 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
 def add_ranking_columns(df):
     """Add ranking columns"""
     ACTION_RANK = {
+        'Buy': 6, 'HOLD': 4, 'Avoid': 2,
+        # Legacy support
         '🟢 STRONG BUY': 7, '🟢 BUY': 6, '🔵 ADD': 5, '🔵 ADD ⚠️': 5, '🔵 ACCUMULATE': 5,
         '⚪ HOLD': 4, '🟡 TRIM': 3, '🔴 REDUCE': 2, '🔴 SELL': 1, '🚨 SELL NOW': 0
     }
@@ -2373,7 +2663,7 @@ def render_daily_summary(df, macro_regime, cash):
     
     action_counts = df['Action'].value_counts()
     col4.write("**Actions:**")
-    for action in ['🟢 STRONG BUY', '🟢 BUY', '🔵 ADD', '⚪ HOLD']:
+    for action in ['Buy', 'HOLD', 'Avoid']:
         count = action_counts.get(action, 0)
         if count > 0:
             col4.caption(f"{action}: {count}")
@@ -2384,16 +2674,17 @@ def render_daily_summary(df, macro_regime, cash):
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.subheader("✅ ADD NOW")
-        addable = df[df['Action'].str.contains('BUY|ADD', na=False)]
+        st.subheader("✅ BUY NOW")
+        addable = df[df['Action'] == 'Buy']
         if len(addable) > 0:
             for _, row in addable.nlargest(3, 'Alpha_Score').iterrows():
                 amt = total_value * (row['Recommended_Pct'] / 100)
-                st.success(f"**{row['Symbol']}**")
+                confidence = row.get('Confidence', 'Low')
+                st.success(f"**{row['Symbol']}** - {confidence} confidence")
                 st.caption(f"Rec: {row['Recommended_Pct']:.1f}% (${amt:,.0f})")
                 st.caption(f"Alpha: {row['Alpha_Score']:.0f}")
         else:
-            st.info("No adds")
+            st.info("No buy opportunities")
     
     with col2:
         st.subheader("🚨 SELL RISK")
@@ -2419,20 +2710,20 @@ def render_daily_summary(df, macro_regime, cash):
     if not macro_regime.get('allow_new_buys', True):
         st.error("**STAND DOWN:** Defensive macro - no new buys")
     
-    adds = df[df['Action'].str.contains('BUY|ADD', na=False)]
+    adds = df[df['Action'] == 'Buy']
     if len(adds) > 0 and macro_regime.get('allow_new_buys', True):
-        st.success("**Consider Adding:**")
+        st.success("**Consider Buying:**")
         for _, row in adds.nlargest(2, 'Alpha_Score').iterrows():
             amt = total_value * (row['Recommended_Pct'] / 100)
-            st.write(f"• {row['Symbol']}: {row['Recommended_Pct']:.1f}% (${amt:,.0f})")
+            confidence = row.get('Confidence', 'Low')
+            st.write(f"• {row['Symbol']}: {row['Recommended_Pct']:.1f}% (${amt:,.0f}) - {confidence} confidence")
     
-    trims = df[df['Action'].str.contains('TRIM|REDUCE|SELL', na=False)]
-    if len(trims) > 0:
-        st.warning("**Consider Trimming:**")
-        for _, row in trims.nlargest(2, 'Sell_Risk_Score').iterrows():
-            diff = row['Market_Value'] - total_value * (row['Recommended_Pct'] / 100)
-            if diff > 0:
-                st.write(f"• {row['Symbol']}: Trim ${diff:,.0f}")
+    avoids = df[df['Action'] == 'Avoid']
+    if len(avoids) > 0:
+        st.warning("**Consider Avoiding:**")
+        for _, row in avoids.nlargest(2, 'Sell_Risk_Score').iterrows():
+            gating = row.get('Primary_Gating_Reason', 'Risk signals')
+            st.write(f"• {row['Symbol']}: {gating}")
 
 if 'results' in st.session_state:
     df = st.session_state.results
@@ -2761,18 +3052,20 @@ if 'results' in st.session_state:
             """, unsafe_allow_html=True)
     
     with col2:
-        st.subheader("✅ TOP 3 ADD OPPORTUNITIES")
-        addable = df[df['Action'].str.contains('BUY|ADD', na=False)]
+        st.subheader("✅ TOP 3 BUY OPPORTUNITIES")
+        addable = df[df['Action'] == 'Buy']
         if len(addable) > 0:
             top_adds = addable.nlargest(3, 'Alpha_Score')
             
             for _, row in top_adds.iterrows():
+                confidence = row.get('Confidence', 'Low')
                 st.markdown(f"""
                 <div class="opportunity-card">
                     <h4>{row['Symbol']} - Alpha: {row['Alpha_Score']:.0f}/100</h4>
-                    <p><strong>Action:</strong> {row['Action']}</p>
+                    <p><strong>Action:</strong> {row['Action']} ({confidence} confidence)</p>
                     <p><strong>Current:</strong> {row['Pct_Portfolio']:.1f}% → <strong>Rec:</strong> {row['Recommended_Pct']:.1f}%</p>
                     <p><strong>Max Allowed:</strong> {row['Max_Allowed_Pct']:.1f}%</p>
+                    <p><strong>Gating Reason:</strong> {row.get('Primary_Gating_Reason', 'N/A')}</p>
                 </div>
                 """, unsafe_allow_html=True)
         else:
@@ -2813,13 +3106,30 @@ if 'results' in st.session_state:
     df_sorted = sort_dataframe(df, sort_mode)
     
     for _, row in df_sorted.iterrows():
-        # Card style
-        if 'BUY' in row['Action']:
-            st.success(f"### {row['Symbol']} - {row['Action']}")
-        elif 'SELL' in row['Action'] or 'REDUCE' in row['Action']:
-            st.error(f"### {row['Symbol']} - {row['Action']}")
+        # Card style based on new action framing
+        action = row.get('Action', 'HOLD')
+        confidence = row.get('Confidence', 'Low')
+        stability = row.get('Recommendation_Stability', 'Stable')
+        
+        if action == 'Buy':
+            st.success(f"### {row['Symbol']} - {action} ({confidence} confidence)")
+        elif action == 'Avoid':
+            st.error(f"### {row['Symbol']} - {action} ({confidence} confidence)")
         else:
-            st.info(f"### {row['Symbol']} - {row['Action']}")
+            st.info(f"### {row['Symbol']} - {action} ({confidence} confidence)")
+        
+        # Stability indicator
+        if stability == 'Breaks':
+            st.error(f"⚠️ Recommendation Stability: {stability} - Veto applied")
+        elif stability == 'Fragile':
+            st.warning(f"⚠️ Recommendation Stability: {stability} - Near threshold")
+        else:
+            st.caption(f"✅ Recommendation Stability: {stability}")
+        
+        # Primary gating reason
+        gating_reason = row.get('Primary_Gating_Reason', '')
+        if gating_reason:
+            st.caption(f"**Gating reason:** {gating_reason}")
         
         # Metrics
         c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -2828,7 +3138,8 @@ if 'results' in st.session_state:
         c3.metric("Current", f"{row['Pct_Portfolio']:.1f}%")
         c4.metric("→ Rec", f"{row['Recommended_Pct']:.1f}%")
         c5.metric("Max", f"{row['Max_Allowed_Pct']:.1f}%")
-        c6.metric("Conf", f"{row['Confidence']:.0f}%")
+        confidence_val = row.get('Confidence', 'Low')
+        c6.metric("Conf", confidence_val)
         
         # Badges (FIXED INDENTATION)
         sleeve_badge = f"badge-{row['Sleeve'].lower()}"
