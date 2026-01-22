@@ -678,6 +678,20 @@ def calculate_sell_risk(row, hist_data, ma50, ma200, news_items, macro_regime):
         score += 10
         soft_triggers.append("⚠️ >10% below MA50")
     
+    # Volatility Harvesting: Ignore RSI overbought signals if SMC_Bias is strongly BULLISH
+    # Check for RSI overbought (typically > 70) - but only if SMC_Bias is NOT strongly BULLISH
+    rsi = row.get('RSI', 50)  # Default to neutral if not available
+    smc_bias = row.get('SMC_Bias', 'Neutral')
+    is_strongly_bullish_smc = 'BULLISH' in str(smc_bias).upper() and 'STRONG' in str(smc_bias).upper()
+    
+    # Only flag RSI overbought if SMC is not strongly bullish
+    if rsi > 70 and not is_strongly_bullish_smc:
+        score += 5
+        soft_triggers.append(f"⚠️ RSI {rsi:.0f} > 70 (overbought)")
+    elif rsi > 70 and is_strongly_bullish_smc:
+        # Ignore overbought signal - this is where gains often start in junior miners
+        soft_triggers.append(f"✅ RSI {rsi:.0f} > 70 but SMC strongly BULLISH - ignoring overbought")
+    
     # News triggers
     for item in news_items:
         title_lower = item.get('title', '').lower()
@@ -756,10 +770,22 @@ def calculate_tape_gate(macro_regime, gold_analysis=None, silver_analysis=None):
         gate['reasons'].append('VIX: Unknown')
     
     # Metal outlook (if available)
+    # Mining-Specific Regimes: Check Gold/Silver correlation for AGGRESSIVE mode
+    is_aggressive_tape = False
     if gold_analysis and silver_analysis:
         gold_bias = gold_analysis.get('bias_short', 'NEUTRAL')
         silver_bias = silver_analysis.get('bias_short', 'NEUTRAL')
-        if 'BEARISH' in str(gold_bias) or 'BEARISH' in str(silver_bias):
+        
+        # Check if gold and silver correlation is rising alongside prices
+        # In production, this would check 30-day correlation trends
+        # For now, check if both are bullish (indicates sector strength)
+        if 'BULLISH' in str(gold_bias) and 'BULLISH' in str(silver_bias):
+            # Rising correlation + rising prices = AGGRESSIVE tape
+            is_aggressive_tape = True
+            gate['throttle'] = 1.5  # Boost throttle for aggressive deployment
+            gate['mode'] = 'Aggressive'
+            gate['reasons'].append('Metals: Bullish + Rising Correlation (AGGRESSIVE)')
+        elif 'BEARISH' in str(gold_bias) or 'BEARISH' in str(silver_bias):
             gate['throttle'] *= 0.9
             gate['reasons'].append('Metals: Bearish')
         elif 'BULLISH' in str(gold_bias) or 'BULLISH' in str(silver_bias):
@@ -776,11 +802,74 @@ def calculate_tape_gate(macro_regime, gold_analysis=None, silver_analysis=None):
         gate['regime_label'] = 'DEFENSIVE'
         gate['new_buys_allowed'] = False
     
+    # Store aggressive flag for use in arbitrate_final_decision
+    gate['is_aggressive'] = is_aggressive_tape
+    
     return gate
 
 
-def calculate_macro_regime():
-    """Calculate macro regime"""
+def calculate_gs_ratio_bias(gold_price: float, silver_price: float) -> Dict:
+    """
+    Calculate Gold/Silver Ratio (GSR) bias for institutional rotation.
+    
+    Logic:
+    - If GSR > 85 (Silver historically cheap): +10 Alpha Bonus to Silver explorers
+    - If GSR < 65 (Gold historically cheap): +10 Alpha Bonus to Gold producers
+    
+    Args:
+        gold_price: Current gold price (e.g., from GC=F or GLD)
+        silver_price: Current silver price (e.g., from SI=F or SLV)
+    
+    Returns:
+        Dict with 'gs_ratio', 'silver_bonus', 'gold_bonus', 'reason'
+    """
+    if gold_price <= 0 or silver_price <= 0:
+        return {
+            'gs_ratio': 0.0,
+            'silver_bonus': 0,
+            'gold_bonus': 0,
+            'reason': 'Invalid prices'
+        }
+    
+    gs_ratio = gold_price / silver_price
+    
+    silver_bonus = 0
+    gold_bonus = 0
+    reason = f"GSR: {gs_ratio:.1f}"
+    
+    if gs_ratio > 80:
+        # Silver historically cheap - favor Silver explorers
+        silver_bonus = 10
+        reason += " (Silver cheap: +10 Torque Bonus to Silver explorers)"
+    elif gs_ratio < 60:
+        # Gold historically cheap - shift bias to Gold producers
+        gold_bonus = 10
+        reason += " (Gold cheap: Shift bias to Gold producers)"
+    else:
+        reason += " (Neutral)"
+    
+    return {
+        'gs_ratio': gs_ratio,
+        'silver_bonus': silver_bonus,
+        'gold_bonus': gold_bonus,
+        'reason': reason
+    }
+
+
+def calculate_macro_regime(hist_slice: pd.DataFrame = None, date_ts: pd.Timestamp = None):
+    """
+    Calculate macro regime dynamically using fresh benchmark data.
+    
+    If hist_slice is provided (for backtest), use it to calculate regime from benchmark.
+    Otherwise, fetch live data (for Streamlit UI).
+    
+    Args:
+        hist_slice: Historical price data for benchmark (GDX/GLD) up to date_ts
+        date_ts: Current date timestamp for backtest (tz-naive)
+    
+    Returns:
+        Dict with regime, throttle_factor, allow_new_buys, factors, dxy, vix
+    """
     regime = {
         'regime': 'NEUTRAL',
         'factors': [],
@@ -790,6 +879,42 @@ def calculate_macro_regime():
         'vix': 0
     }
     
+    # For backtest mode: use hist_slice if provided
+    if hist_slice is not None and not hist_slice.empty:
+        # Use benchmark data (GDX/GLD) to detect regime changes
+        # Check for sector crash: if benchmark drops >10% in last 2 days, switch to DEFENSIVE
+        if len(hist_slice) >= 2:
+            current_price = hist_slice['Close'].iloc[-1]
+            price_2d_ago = hist_slice['Close'].iloc[-2] if len(hist_slice) >= 2 else current_price
+            
+            drop_pct = ((price_2d_ago - current_price) / price_2d_ago * 100) if price_2d_ago > 0 else 0
+            
+            if drop_pct > 10.0:  # Sector crash detected
+                regime['regime'] = 'DEFENSIVE'
+                regime['allow_new_buys'] = False
+                regime['throttle_factor'] = 0.5
+                regime['factors'].append(f"Sector crash: -{drop_pct:.1f}% in 2 days")
+            elif drop_pct > 5.0:  # Significant drop
+                regime['regime'] = 'NEUTRAL'
+                regime['throttle_factor'] = 0.8
+                regime['factors'].append(f"Sector weakness: -{drop_pct:.1f}% in 2 days")
+        
+        # Check trend using 20-day MA
+        if len(hist_slice) >= 20:
+            ma20 = hist_slice['Close'].tail(20).mean()
+            current_price = hist_slice['Close'].iloc[-1]
+            
+            if current_price > ma20 * 1.05:
+                regime['regime'] = 'BULL'
+                regime['throttle_factor'] = 1.2
+                regime['factors'].append("Sector >5% above MA20 (bullish)")
+            elif current_price < ma20 * 0.95:
+                regime['regime'] = 'DEFENSIVE'
+                regime['allow_new_buys'] = False
+                regime['throttle_factor'] = 0.5
+                regime['factors'].append("Sector >5% below MA20 (bearish)")
+    
+    # For Streamlit UI mode: fetch live data
     if not YFINANCE_AVAILABLE:
         return regime
     
@@ -1005,7 +1130,7 @@ def calculate_financing_overhang(news_items, ticker, runway_months, institutiona
 
 
 def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk, 
-                             alpha_score, macro_regime, discovery, tape_gate=None, strict_mode=False):
+                             alpha_score, macro_regime, discovery, tape_gate=None, strict_mode=False, risk_mode='BALANCED'):
     """
     Final decision arbitration with model hierarchy and veto logic.
     Model roles: Alpha (recommends), Risk/Liquidity/Overhang (may veto).
@@ -1100,6 +1225,7 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
     
     # Apply macro throttle
     base_max *= macro_regime.get('throttle_factor', 1.0)
+    
     decision['max_allowed_pct'] = base_max
     
     # Decision logic
@@ -1154,13 +1280,119 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
         decision['reasoning'].append(veto_reason)
         return decision
     
+    # Regime-aware alpha thresholds
+    regime = macro_regime.get('regime', 'NEUTRAL')
+    # Check for bull/expansion regimes (RISK-ON is also treated as bullish)
+    is_bull_regime = regime in ['BULL', 'EXPANSION', 'RISK-ON']
+    # Also check if throttle_factor indicates bullish conditions (> 1.0)
+    throttle_factor = macro_regime.get('throttle_factor', 1.0)
+    if throttle_factor > 1.0:
+        is_bull_regime = True
+    
+    # High-Torque Mode: Increase Explorer position size in BULL regime (after is_bull_regime is defined)
+    stage = row.get('stage', '').strip() if isinstance(row.get('stage'), str) else ''
+    if stage == 'Explorer' and is_bull_regime:
+        # Allow up to 15% allocation for Explorer stocks in bull regimes
+        if base_max < 15.0:
+            base_max = 15.0
+            decision['max_allowed_pct'] = 15.0
+            decision['warnings'].append(f"⚡ High-Torque: Explorer + BULL regime = 15% max position size")
+    
+    # Base alpha thresholds
+    buy_threshold = 60  # Default Buy threshold
+    strong_buy_threshold = 75  # Default Strong Buy threshold
+    sell_exit_threshold = 40  # Default exit threshold
+    
+    # AGGRESSIVE mode: Adjusted thresholds for mining sector beta
+    if risk_mode == 'AGGRESSIVE':
+        buy_threshold = 35  # Capture early breakouts
+        strong_buy_threshold = 50  # Strong buy at 50
+        sell_exit_threshold = 30  # Let winners run longer
+        decision['warnings'].append(f"🔥 AGGRESSIVE mode: Buy={buy_threshold}, Strong={strong_buy_threshold}, Exit={sell_exit_threshold}")
+    
+    # Regime Sensitivity: Lower Buy threshold in BULL/EXPANSION regimes
+    if is_bull_regime:
+        if risk_mode != 'AGGRESSIVE':  # Don't override AGGRESSIVE thresholds
+            buy_threshold = 50  # Lower threshold from 60 to 50 in bull markets
+        # High-Torque Mode: Further lower threshold for BALANCED in bull regimes
+        if risk_mode == 'BALANCED':
+            buy_threshold = 40  # Front-run moves: Lower threshold to 40 for aggressive alpha deployment
+            decision['warnings'].append(f"🚀 High-Torque Mode ({risk_mode}): Bull regime threshold lowered to {buy_threshold}")
+        elif risk_mode != 'AGGRESSIVE':
+            decision['warnings'].append(f"🐂 Bull regime detected ({regime}): Lowered Buy threshold to {buy_threshold}")
+    
+    # Mining Torque Factor: Add bonus for Explorer stage with AGGRESSIVE tape gate
+    stage = row.get('stage', '').strip()
+    # Check if tape gate is aggressive (throttle > 1.0, mode='Aggressive', or is_aggressive flag)
+    tape_gate_throttle = tape_gate.get('throttle', 1.0) if tape_gate else 1.0
+    tape_gate_allowed = tape_gate.get('new_buys_allowed', True) if tape_gate else True
+    tape_gate_mode = tape_gate.get('mode', 'Neutral') if tape_gate else 'Neutral'
+    tape_gate_is_aggressive = tape_gate.get('is_aggressive', False) if tape_gate else False
+    is_aggressive_tape = (tape_gate_throttle > 1.0 or 
+                         tape_gate_mode == 'Aggressive' or 
+                         tape_gate_is_aggressive or
+                         (tape_gate and 'aggressive' in str(tape_gate.get('reasons', [])).lower()))
+    
+    alpha_score_adjusted = alpha_score
+    
+    if stage == 'Explorer' and is_aggressive_tape and tape_gate_allowed:
+        torque_bonus = 15 if risk_mode == 'AGGRESSIVE' else 10  # +15 in AGGRESSIVE mode, +10 otherwise
+        alpha_score_adjusted = alpha_score + torque_bonus
+        decision['warnings'].append(f"⚡ Mining Torque: Explorer + Aggressive tape gate (+{torque_bonus} alpha boost)")
+        decision['reasoning'].append(f"Mining torque applied: {alpha_score:.0f} → {alpha_score_adjusted:.0f}")
+    
+    # AGGRESSIVE mode adjustments (when tape gate is AGGRESSIVE)
+    if is_aggressive_tape:
+        # Lower Buy threshold to 45 in AGGRESSIVE mode
+        if buy_threshold > 45:
+            buy_threshold = 45
+            decision['warnings'].append(f"🔥 AGGRESSIVE mode: Buy threshold lowered to {buy_threshold}")
+        
+        # Raise Max Position Size from 10% to 15%
+        base_max = decision.get('max_allowed_pct', 5.0)
+        if base_max < 15.0:
+            decision['max_allowed_pct'] = 15.0
+            decision['warnings'].append(f"🔥 AGGRESSIVE mode: Max position size raised to 15%")
+    
+    alpha_score_for_decision = alpha_score_adjusted
+    
+    # Discovery Exception: One-time High Confidence buy even if alpha < threshold
+    discovery_active = discovery[0] if isinstance(discovery, (tuple, list)) and len(discovery) > 0 else False
+    discovery_reason = discovery[1] if isinstance(discovery, (tuple, list)) and len(discovery) > 1 else ''
+    
+    # Check if Discovery tag is in news intelligence (passed via discovery tuple)
+    if discovery_active and discovery_reason:
+        # Allow buy even below threshold with discovery exception
+        if alpha_score_for_decision >= 45:  # Still need some minimum alpha
+            decision['action'] = 'Buy'
+            decision['confidence'] = 'High'
+            decision['recommended_pct'] = min(base_max * 0.8, current_pct + 1.5)
+            decision['primary_gating_reason'] = f"Discovery exception: {discovery_reason} (Alpha: {alpha_score:.0f}/100)"
+            decision['warnings'].append(f"🔍 Discovery exception: High Confidence buy despite alpha {alpha_score:.0f} < {buy_threshold}")
+            decision['reasoning'].append(f"Discovery tag detected: {discovery_reason}")
+            decision['gates_passed'].append("✅ Discovery exception granted")
+            # Don't return yet - continue to add alpha reasoning
+    
+    # Exit logic: Make Alpha exit less sensitive during bull regimes
+    # Note: sell_exit_threshold is already set above based on risk_mode (30 for AGGRESSIVE, 40 default)
+    if is_bull_regime and risk_mode != 'AGGRESSIVE':  # Don't override AGGRESSIVE exit threshold
+        sell_exit_threshold = 50  # Higher threshold during bull = less sensitive exits
+        decision['warnings'].append(f"🐂 Bull regime: Exit threshold raised to {sell_exit_threshold} (reduced shakeout risk)")
+    
     # Alpha model recommendations (only if not vetoed)
-    if sell_score >= 40:
+    if sell_score >= sell_exit_threshold:
         decision['action'] = 'Avoid'
         decision['confidence'] = 'High'
         decision['recommended_pct'] = current_pct * 0.5
         decision['reasoning'].extend(sell_risk['soft_triggers'][:2])
         decision['primary_gating_reason'] = f"Risk signals: Sell risk {sell_score}/100"
+    
+    elif sell_score >= sell_exit_threshold:  # Use the threshold set above (30 for AGGRESSIVE, 40 default, 50 for bull)
+        decision['action'] = 'Avoid'
+        decision['confidence'] = 'High'
+        decision['recommended_pct'] = current_pct * 0.5
+        decision['reasoning'].extend(sell_risk['soft_triggers'][:2] if 'soft_triggers' in sell_risk else [])
+        decision['primary_gating_reason'] = f"Risk signals: Sell risk {sell_score}/100 (threshold: {sell_exit_threshold})"
     
     elif sell_score >= 20:
         decision['action'] = 'Avoid'
@@ -1168,8 +1400,13 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
         decision['recommended_pct'] = current_pct * 0.8
         decision['primary_gating_reason'] = f"Elevated sell risk: {sell_score}/100"
     
-    elif alpha_score >= 75 and current_pct < base_max:
-        if alpha_score >= 85:
+    # Apply discovery exception override if not already set
+    elif discovery_active and discovery_reason and alpha_score_for_decision >= 45:
+        # Already handled above, skip to end
+        pass
+    
+    elif alpha_score_for_decision >= strong_buy_threshold and current_pct < base_max:
+        if alpha_score_for_decision >= 85:
             decision['action'] = 'Buy'
             decision['confidence'] = 'High'
         else:
@@ -1177,19 +1414,19 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
             decision['confidence'] = 'Medium'
         
         decision['recommended_pct'] = min(base_max, current_pct + 2.0)
-        decision['primary_gating_reason'] = f"Alpha model: {alpha_score:.0f}/100"
+        decision['primary_gating_reason'] = f"Alpha model: {alpha_score_for_decision:.0f}/100"
     
-    elif alpha_score >= 60 and current_pct < base_max * 0.8:
+    elif alpha_score_for_decision >= buy_threshold and current_pct < base_max * 0.8:
         decision['action'] = 'Buy'
         decision['confidence'] = 'Medium'
         decision['recommended_pct'] = min(base_max * 0.8, current_pct + 1.0)
-        decision['primary_gating_reason'] = f"Alpha model: {alpha_score:.0f}/100"
+        decision['primary_gating_reason'] = f"Alpha model: {alpha_score_for_decision:.0f}/100"
     
     else:
         decision['action'] = 'HOLD'
         decision['confidence'] = 'Low'
         decision['recommended_pct'] = current_pct
-        decision['primary_gating_reason'] = f"Insufficient alpha signal: {alpha_score:.0f}/100"
+        decision['primary_gating_reason'] = f"Insufficient alpha signal: {alpha_score_for_decision:.0f}/100 (threshold: {buy_threshold})"
     
     decision['reasoning'].append(f"Alpha: {alpha_score:.0f}/100")
     decision['gates_passed'].append(f"✅ Liquidity: {liq_tier}")

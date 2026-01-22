@@ -1,0 +1,156 @@
+{
+  "2025-07-01_2026-01-01": {
+    "start": "2025-07-01",
+    "end": "2026-01-01",
+    "created_at": "2026-01-20T16:29:20.570833",
+    "symbols": {
+      "AG": {
+        "status": "ok",
+        "rows": 128,
+        "sha256": "08f887706e53b4fe280c6433abc587b46bd1a4e3181de26c0ba503896124bf1c"
+      },
+      "AGXPF": {
+        "status": "ok",
+        "rows": 128,
+        "sha256": "6f4990d7042bf4ab384a19c48a7ba7ddc3c477057f1e05b3bcd59d1037d6af6c"
+      },
+      "BORMF": {
+        "status": "ok",
+        "rows": 128,
+        "sha256": "fbe28feaaed543e40e67789be73dbe3ecf55fe1d39883933bf79f999c064209a"
+      },
+      "EXNRF": {
+        "status": "ok",
+        "rows": 128,
+        "sha256": "94361189469457b5110839f49a08ec431f9340571737ce9c049074e1acf19b87"
+      },
+      "GSVRF": {
+        "status": "ok",
+        "rows": 128,
+        "sha256": "6cfd3a40d2bb8a7ff71e19cb8337d8ffd470e82ecfa02f7561b4617efff4f537"
+      },
+      "ITRG": {
+        "status": "ok",
+        "rows": 128,
+        "sha256": "36b00800faf840324b23a886ac4cd5cb2ff79603c837b34ebb9b23398ee2d0a9"
+      },
+      "JAGGF": {
+        "status": "ok",
+        "rows": 128,
+        "sha256": "9ceb9fd6b52fea748e65afd45dada0e0975606a0509869268eedcdbbad003735"
+      },
+      "JZRIF": {
+        "status": "ok",
+        "rows": 128,
+        "sha256": "ce1f939137637278337b8bfc21c59f3de2a8f8377d4eb5dab51325f5a5d4152b"
+      },
+      "LOMLF": {
+        "status": "ok",
+        "rows": 128,
+        "sha256": "71f089f99c331abff2d752952d881593324656c58ac92d1f6da9703c53453a66"
+      },
+      "LUCMF": {
+        "status": "ok",
+        "rows": 128,
+        "sha256": "d49268a38b80b7a91bedec87701603f6e00061cc53a8e49f14d7f23937946094"
+      },
+      "SMAGF": {
+        "status": "ok",
+        "rows": 128,
+        "sha256": "cad8574eadfdef4f160bbdcb95d9575721e93e5a6aa497f9662b18dd8d4af950"
+      },
+      "SMDRF": {
+        "status": "ok",
+        "rows": 128,
+        "sha256": "ac96904254a7c4af433afc6b805c3517b58c0196a46763a51870282e2a3b0103"
+      },
+      "TSKFF": {
+        "status": "ok",
+        "rows": 128,
+        "sha256": "f8ef2dadfbdd7bf252c65399f950942919dc6be21e358162f1179af2fb269e28"
+      },
+      "WRLGF": {
+        "status": "ok",
+        "rows": 128,
+        "sha256": "dfc10957a409c64d6d3a601f3b68932ebc5788df428c8f67905a6484f3e519a6"
+      }
+    }
+  },
+  "2024-01-01_2024-06-30": {
+    "start": "2024-01-01",
+    "end": "2024-06-30",
+    "created_at": "2026-01-20T21:31:09.203697",
+    "symbols": {
+      "AG": {
+        "status": "ok",
+        "rows": 124,
+        "sha256": "277a964413267867480317dc30a04da750f5a09a5e5bfd9876dbd05364ff9472"
+      },
+      "AGXPF": {
+        "status": "ok",
+        "rows": 124,
+        "sha256": "700cb9baf586db90e6f61305fc0db82d863bdad09b4aa8d7b7126a52831dd0e0"
+      },
+      "BORMF": {
+        "status": "ok",
+        "rows": 124,
+        "sha256": "79c9d4b4b8bc7776fa2128acd4aa0fd34860904fbb135ae4e278608c3dc5f2a8"
+      },
+      "EXNRF": {
+        "status": "ok",
+        "rows": 124,
+        "sha256": "67e50ba83075b8788b377cd766e9833ac742af5b4e4e0fc7c5e6526af76d7c68"
+      },
+      "GSVRF": {
+        "status": "ok",
+        "rows": 124,
+        "sha256": "8bbe7f80e2edab0c29e72bab0c11f76b4cda68007f6b098bbbaf495d80506b5d"
+      },
+      "ITRG": {
+        "status": "ok",
+        "rows": 124,
+        "sha256": "0d9c42158962ce63f0320c052a2796c6790415abdbd1cf129c9b1ebd4893cc2c"
+      },
+      "JAGGF": {
+        "status": "ok",
+        "rows": 124,
+        "sha256": "275bf949ef3d9d18d1819c188b05827b62249fb8f66d202c8248b70fd2bdcaea"
+      },
+      "JZRIF": {
+        "status": "ok",
+        "rows": 124,
+        "sha256": "e2b113ce1e83e10fd376c74a9f20a0dedbe8d7c7cde1df571eb9ca3b147413c2"
+      },
+      "LOMLF": {
+        "status": "ok",
+        "rows": 124,
+        "sha256": "1d68f76c67cb0eead36fdfd3c38551343a2bd1f777f6cb11e852712f0f631a55"
+      },
+      "LUCMF": {
+        "status": "ok",
+        "rows": 124,
+        "sha256": "d599cca1e9498a22b5d49b9e177c8b4973601853e01a1db967d40a6d711a4dc8"
+      },
+      "SMAGF": {
+        "status": "ok",
+        "rows": 124,
+        "sha256": "090cb3c4cf35773a3d2a422d26980ea951b2efada30921dec62f4f8bf5d3babe"
+      },
+      "SMDRF": {
+        "status": "ok",
+        "rows": 124,
+        "sha256": "b55e6ef1bc84bf0d5a8f8d25cc13dfd044dd8108f3594fb40f782a4ce5cb6fda"
+      },
+      "TSKFF": {
+        "status": "ok",
+        "rows": 124,
+        "sha256": "afe9a82b1808259885cb13520c469a784c6e0e3a1b58907fcc5e4989674162a4"
+      },
+      "WRLGF": {
+        "status": "ok",
+        "rows": 124,
+        "sha256": "4c417e6f71e7e1d4245d48411b3d83f387d7dc0523dcefad4eb2e8dc8f65c60c"
+      }
+    }
+  }
+}

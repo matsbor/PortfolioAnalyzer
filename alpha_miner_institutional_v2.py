@@ -48,6 +48,13 @@ from alpha_miner_core import (
     tag_news,
 )
 
+# Import scanner module
+try:
+    from alpha_miner_scanner import scan_symbols, load_symbols_from_csv
+    SCANNER_AVAILABLE = True
+except ImportError:
+    SCANNER_AVAILABLE = False
+
 # Import institutional enhancements (v1 + v2 + v3 if available)
 try:
     from institutional_enhancements import (
@@ -1077,6 +1084,140 @@ if 'tape_gate' in st.session_state:
     if tape_gate['throttle'] < 1.0:
         st.warning(f"⚠️ Throttle factor: {tape_gate['throttle']:.2f} (reduced position sizing)")
 
+# ============================================================================
+# MINING DISCOVERY SCANNER
+# ============================================================================
+if SCANNER_AVAILABLE:
+    st.markdown("---")
+    st.header("🔍 Mining Discovery Scanner")
+    st.caption("Scan TSX-V miners and other symbols to identify top discovery candidates ranked by Alpha Score")
+    
+    scanner_tab1, scanner_tab2 = st.tabs(["📊 Scanner", "📁 Upload CSV"])
+    
+    with scanner_tab1:
+        # Manual symbol input
+        symbols_input = st.text_area(
+            "Enter symbols (comma-separated)",
+            placeholder="e.g., BORMF, LUCMF, ABRA, etc.",
+            height=100
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            min_alpha = st.number_input("Minimum Alpha Score", min_value=0.0, max_value=100.0, value=40.0, step=5.0)
+        with col2:
+            max_results = st.number_input("Max Results", min_value=1, max_value=20, value=5, step=1)
+        
+        if st.button("🔍 Scan Symbols", type="primary", use_container_width=True):
+            if symbols_input:
+                symbols = [s.strip().upper() for s in symbols_input.split(',') if s.strip()]
+                if symbols:
+                    with st.spinner(f"Scanning {len(symbols)} symbols..."):
+                        try:
+                            scanner_results = scan_symbols(
+                                symbols=symbols,
+                                data_dir=Path('./.scanner_cache'),
+                                macro_regime=macro_regime,
+                                min_alpha_score=min_alpha,
+                                max_results=max_results
+                            )
+                            
+                            if not scanner_results.empty:
+                                st.session_state.scanner_results = scanner_results
+                                st.success(f"✅ Found {len(scanner_results)} discovery candidates")
+                            else:
+                                st.warning("No candidates found matching criteria")
+                                st.session_state.scanner_results = pd.DataFrame()
+                        except Exception as e:
+                            st.error(f"Scanner error: {type(e).__name__}: {str(e)}")
+                            import traceback
+                            with st.expander("Technical details", expanded=False):
+                                st.code(traceback.format_exc(), language='python')
+                else:
+                    st.warning("Please enter at least one symbol")
+            else:
+                st.warning("Please enter symbols to scan")
+        
+        # Display scanner results
+        if 'scanner_results' in st.session_state and not st.session_state.scanner_results.empty:
+            st.markdown("### 🎯 Top Discovery Candidates")
+            results_df = st.session_state.scanner_results.copy()
+            
+            # Highlight top candidates
+            st.dataframe(
+                results_df.style.format({
+                    'Alpha_Score': '{:.1f}',
+                    'Survival_Score': '{:.0f}',
+                    'Return_7d': '{:.1f}%',
+                    'Return_30d': '{:.1f}%',
+                    'Volatility_60d': '{:.1f}%',
+                    'Price': '${:.2f}',
+                    'MA50': '${:.2f}',
+                    'MA200': '${:.2f}'
+                }).background_gradient(subset=['Alpha_Score'], cmap='RdYlGn'),
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Show macro regime filter status
+            if macro_regime.get('regime') == 'DEFENSIVE':
+                st.info("🔒 **DEFENSIVE Mode Active**: Only showing Producers with high Survival scores (≥60)")
+            else:
+                st.caption(f"📊 **{macro_regime.get('regime', 'NEUTRAL')} Mode**: Showing all discovery candidates")
+    
+    with scanner_tab2:
+        # CSV upload
+        uploaded_file = st.file_uploader("Upload CSV with symbols", type=['csv'])
+        
+        if uploaded_file is not None:
+            try:
+                # Read CSV from uploaded file (Streamlit file uploader returns BytesIO)
+                df_csv = pd.read_csv(uploaded_file)
+                if 'Symbol' in df_csv.columns:
+                    symbols_from_csv = df_csv['Symbol'].dropna().astype(str).str.strip().str.upper().tolist()
+                    st.success(f"✅ Loaded {len(symbols_from_csv)} symbols from CSV")
+                    st.text_area("Symbols loaded:", value=', '.join(symbols_from_csv[:20]) + (f" ... and {len(symbols_from_csv) - 20} more" if len(symbols_from_csv) > 20 else ""), height=100, disabled=True)
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        min_alpha_csv = st.number_input("Minimum Alpha Score", min_value=0.0, max_value=100.0, value=40.0, step=5.0, key='min_alpha_csv')
+                    with col2:
+                        max_results_csv = st.number_input("Max Results", min_value=1, max_value=20, value=5, step=1, key='max_results_csv')
+                    
+                    if st.button("🔍 Scan CSV Symbols", type="primary", use_container_width=True):
+                        with st.spinner(f"Scanning {len(symbols_from_csv)} symbols from CSV..."):
+                            try:
+                                scanner_results = scan_symbols(
+                                    symbols=symbols_from_csv,
+                                    data_dir=Path('./.scanner_cache'),
+                                    macro_regime=macro_regime,
+                                    min_alpha_score=min_alpha_csv,
+                                    max_results=max_results_csv
+                                )
+                                
+                                if not scanner_results.empty:
+                                    st.session_state.scanner_results = scanner_results
+                                    st.success(f"✅ Found {len(scanner_results)} discovery candidates")
+                                else:
+                                    st.warning("No candidates found matching criteria")
+                                    st.session_state.scanner_results = pd.DataFrame()
+                            except Exception as e:
+                                st.error(f"Scanner error: {type(e).__name__}: {str(e)}")
+                                import traceback
+                                with st.expander("Technical details", expanded=False):
+                                    st.code(traceback.format_exc(), language='python')
+                else:
+                    st.error(f"CSV file must have a 'Symbol' column. Found columns: {df_csv.columns.tolist()}")
+            except Exception as e:
+                st.error(f"Error loading CSV: {type(e).__name__}: {str(e)}")
+                import traceback
+                with st.expander("Technical details", expanded=False):
+                    st.code(traceback.format_exc(), language='python')
+        else:
+            st.info("📁 Upload a CSV file with a 'Symbol' column to scan multiple symbols at once")
+            st.caption("Example CSV format:")
+            st.code("Symbol\nBORMF\nLUCMF\nABRA\n...", language='csv')
+
 # Quick Analysis for Watchlist
 if st.session_state.get('watchlist'):
     st.markdown("---")
@@ -1295,7 +1436,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
                         df.at[idx, 'Pct_From_52w_High'] = ((hist['Close'].iloc[-1] - high_52w) / high_52w * 100)
                         df.at[idx, 'Pct_From_52w_Low'] = ((hist['Close'].iloc[-1] - low_52w) / low_52w * 100)
                         
-                        df.at[idx, 'Volatility_60d'] = hist['Close'].pct_change().tail(60).std() * 100 if len(hist) >= 60 else 5
+                        df.at[idx, 'Volatility_60d'] = hist['Close'].pct_change(fill_method=None).tail(60).std() * 100 if len(hist) >= 60 else 5
                         
                         df.at[idx, 'MA50'] = hist['Close'].tail(50).mean() if len(hist) >= 50 else 0
                         df.at[idx, 'MA200'] = hist['Close'].tail(200).mean() if len(hist) >= 200 else 0
