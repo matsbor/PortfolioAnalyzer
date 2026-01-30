@@ -1,0 +1,21 @@
+{
+  "_README": "User-editable AISC data. Update with latest reported values from company quarterly/annual filings. The AISC tracker uses this as step 5 (after trying yfinance and Tiingo APIs first).",
+  "_LAST_UPDATED": "2026-01-30",
+  "_UPDATE_INSTRUCTIONS": "Add entries as: \"TICKER\": {\"aisc\": VALUE, \"unit\": \"$/oz\", \"metal\": \"Gold\", \"source\": \"Q3 2025 Filing\"}. Set unit to 'N/A' for royalty/streaming companies.",
+  "GOLD": {"aisc": 1280, "unit": "$/oz", "metal": "Gold", "source": "Q3 2025 Filing"},
+  "NEM": {"aisc": 1400, "unit": "$/oz", "metal": "Gold", "source": "Q3 2025 Filing"},
+  "AEM": {"aisc": 1200, "unit": "$/oz", "metal": "Gold", "source": "Q3 2025 Filing"},
+  "KGC": {"aisc": 1350, "unit": "$/oz", "metal": "Gold", "source": "Q3 2025 Filing"},
+  "BTG": {"aisc": 1300, "unit": "$/oz", "metal": "Gold", "source": "Q3 2025 Filing"},
+  "EGO": {"aisc": 1250, "unit": "$/oz", "metal": "Gold", "source": "Q3 2025 Filing"},
+  "IAG": {"aisc": 1500, "unit": "$/oz", "metal": "Gold", "source": "Q3 2025 Filing"},
+  "AG": {"aisc": 22.50, "unit": "$/oz", "metal": "Silver", "source": "Q3 2025 Filing"},
+  "PAAS": {"aisc": 18.00, "unit": "$/oz", "metal": "Silver", "source": "Q3 2025 Filing"},
+  "HL": {"aisc": 12.50, "unit": "$/oz", "metal": "Silver", "source": "Q3 2025 Filing"},
+  "CCJ": {"aisc": 35.00, "unit": "$/lb", "metal": "Uranium", "source": "Q3 2025 Filing"},
+  "FCX": {"aisc": 2.45, "unit": "$/lb", "metal": "Copper", "source": "Q3 2025 Filing"},
+  "SCCO": {"aisc": 2.10, "unit": "$/lb", "metal": "Copper", "source": "Q3 2025 Filing"},
+  "FNV": {"aisc": 0, "unit": "N/A", "metal": "Gold", "source": "Royalty/Streaming"},
+  "WPM": {"aisc": 0, "unit": "N/A", "metal": "Gold", "source": "Royalty/Streaming"},
+  "RGLD": {"aisc": 0, "unit": "N/A", "metal": "Gold", "source": "Royalty/Streaming"}
+}

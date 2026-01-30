@@ -531,9 +531,14 @@ def check_metal_regime_alerts(
     if not spot_prices or not hist_cache:
         return alerts
 
+    # Metal-to-ETF mapping: configurable via spot_prices dict.
+    # Callers can pass 'gold_etf_ticker' / 'silver_etf_ticker' keys
+    # to override the defaults. This avoids hardcoding specific ETFs.
+    gold_etf = spot_prices.get('gold_etf_ticker', 'GLD')
+    silver_etf = spot_prices.get('silver_etf_ticker', 'SLV')
     metal_map = [
-        ("gold_live", "GLD", "Gold"),
-        ("silver_live", "SLV", "Silver"),
+        ("gold_live", gold_etf, "Gold"),
+        ("silver_live", silver_etf, "Silver"),
     ]
 
     for price_key, etf_ticker, metal_name in metal_map:
