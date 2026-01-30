@@ -1087,3 +1087,200 @@ exception = check_discovery_exception_ultimate(
 
 ═══════════════════════════════════════════════════════════════════════════
 """
+
+# ============================================================================
+# 8. MULTI-TIMEFRAME SMC ANALYSIS
+# ============================================================================
+
+def calculate_smc_structure_timeframe(hist, symbol='', timeframe='daily'):
+    """
+    Resample historical data to the specified timeframe and run SMC analysis.
+
+    Wraps calculate_smc_structure with optional resampling so that the same
+    institutional-grade structure engine can be applied to weekly and monthly
+    bars without the caller needing to resample manually.
+
+    Parameters:
+        hist:      DataFrame with OHLCV columns (DatetimeIndex expected for
+                   weekly/monthly resampling).
+        symbol:    Ticker symbol string (passed through to calculate_smc_structure).
+        timeframe: 'daily' (no resample), 'weekly', or 'monthly'.
+
+    Returns:
+        dict: Same format as calculate_smc_structure, with an added 'timeframe' key.
+    """
+    default_result = {
+        'state': 'NEUTRAL',
+        'event': 'NONE',
+        'structure': 'RANGING',
+        'confidence': 50,
+        'last_swing_high': 0,
+        'last_swing_low': 0,
+        'explanation': '',
+        'signals': [],
+        'timeframe': timeframe
+    }
+
+    if hist is None or not hasattr(hist, 'empty') or hist.empty:
+        default_result['explanation'] = f'No data for {timeframe} SMC'
+        return default_result
+
+    try:
+        df = hist.copy()
+
+        # Ensure a DatetimeIndex so .resample() works
+        if not isinstance(df.index, pd.DatetimeIndex):
+            if 'Date' in df.columns:
+                df['Date'] = pd.to_datetime(df['Date'])
+                df = df.set_index('Date')
+            else:
+                try:
+                    df.index = pd.to_datetime(df.index)
+                except Exception:
+                    default_result['explanation'] = (
+                        f'Cannot parse dates for {timeframe} resampling'
+                    )
+                    return default_result
+
+        agg_dict = {
+            'Open': 'first',
+            'High': 'max',
+            'Low': 'min',
+            'Close': 'last',
+            'Volume': 'sum'
+        }
+
+        if timeframe == 'weekly':
+            if len(df) < 50:
+                default_result['explanation'] = (
+                    'Insufficient data for weekly SMC (need 50+ daily bars)'
+                )
+                return default_result
+            df = df.resample('W').agg(agg_dict).dropna()
+
+        elif timeframe == 'monthly':
+            if len(df) < 100:
+                default_result['explanation'] = (
+                    'Insufficient data for monthly SMC (need 100+ daily bars)'
+                )
+                return default_result
+            df = df.resample('ME').agg(agg_dict).dropna()
+
+        # 'daily' passes through without resampling
+
+        # Guard: the underlying engine needs at least 50 bars
+        if len(df) < 50:
+            default_result['explanation'] = (
+                f'Insufficient bars after {timeframe} resampling ({len(df)} bars)'
+            )
+            return default_result
+
+        # Delegate to the existing production SMC engine
+        result = calculate_smc_structure(df, symbol)
+        result['timeframe'] = timeframe
+        return result
+
+    except Exception as e:
+        default_result['explanation'] = f'{timeframe} SMC error: {str(e)[:50]}'
+        default_result['confidence'] = 0
+        return default_result
+
+
+def calculate_multi_timeframe_alignment(hist, symbol=''):
+    """
+    Multi-timeframe SMC alignment analysis.
+
+    Runs calculate_smc_structure_timeframe on daily, weekly, and monthly
+    timeframes and determines whether the three agree on direction.
+
+    Alignment score logic:
+        All 3 bullish  -> 100
+        2 of 3 bullish ->  75
+        Mixed / neutral->  50
+        2 of 3 bearish ->  25
+        All 3 bearish  ->   0
+
+    Parameters:
+        hist:   DataFrame with OHLCV data (DatetimeIndex expected).
+        symbol: Ticker symbol string.
+
+    Returns:
+        dict with alignment_score, per-timeframe trends, full SMC dicts,
+        a discrete signal string, and a human-readable summary line.
+    """
+    # Run SMC on all three timeframes
+    daily_smc = calculate_smc_structure_timeframe(hist, symbol=symbol, timeframe='daily')
+    weekly_smc = calculate_smc_structure_timeframe(hist, symbol=symbol, timeframe='weekly')
+    monthly_smc = calculate_smc_structure_timeframe(hist, symbol=symbol, timeframe='monthly')
+
+    # ------------------------------------------------------------------
+    # Classify each timeframe into a simple trend direction
+    # ------------------------------------------------------------------
+    def _classify_trend(smc_result):
+        state = smc_result.get('state', 'NEUTRAL').lower()
+        confidence = smc_result.get('confidence', 50)
+
+        if 'bull' in state or confidence > 60:
+            return 'bullish'
+        elif 'bear' in state or confidence < 40:
+            return 'bearish'
+        else:
+            return 'neutral'
+
+    daily_trend = _classify_trend(daily_smc)
+    weekly_trend = _classify_trend(weekly_smc)
+    monthly_trend = _classify_trend(monthly_smc)
+
+    trends = [daily_trend, weekly_trend, monthly_trend]
+
+    # ------------------------------------------------------------------
+    # Alignment score (0-100)
+    # ------------------------------------------------------------------
+    bullish_count = trends.count('bullish')
+    bearish_count = trends.count('bearish')
+
+    if bullish_count == 3:
+        alignment_score = 100
+    elif bearish_count == 3:
+        alignment_score = 0
+    elif bullish_count == 2:
+        alignment_score = 75
+    elif bearish_count == 2:
+        alignment_score = 25
+    else:
+        alignment_score = 50
+
+    # ------------------------------------------------------------------
+    # Discrete signal
+    # ------------------------------------------------------------------
+    if alignment_score >= 90:
+        signal = 'STRONG_BUY'
+    elif alignment_score >= 65:
+        signal = 'BUY'
+    elif alignment_score <= 10:
+        signal = 'STRONG_SELL'
+    elif alignment_score <= 35:
+        signal = 'SELL'
+    else:
+        signal = 'NEUTRAL'
+
+    # ------------------------------------------------------------------
+    # Human-readable one-line summary
+    # ------------------------------------------------------------------
+    summary = (
+        f"MTF Alignment for {symbol or 'N/A'}: "
+        f"Daily={daily_trend}, Weekly={weekly_trend}, Monthly={monthly_trend} "
+        f"=> {signal} (score {alignment_score}/100)"
+    )
+
+    return {
+        'alignment_score': alignment_score,
+        'daily_trend': daily_trend,
+        'weekly_trend': weekly_trend,
+        'monthly_trend': monthly_trend,
+        'daily_smc': daily_smc,
+        'weekly_smc': weekly_smc,
+        'monthly_smc': monthly_smc,
+        'signal': signal,
+        'summary': summary
+    }

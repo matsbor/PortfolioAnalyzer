@@ -2327,6 +2327,305 @@ def build_cache_only(portfolio_csv: str, start_date: str, end_date: str, data_di
     print(f"\n✓ Cache build complete: {len(hist_cache)} symbol(s) cached successfully")
     return True, missing_symbols
 
+
+def calculate_drawdown_stats(equity_curve: pd.Series) -> Dict:
+    """
+    Calculate comprehensive drawdown statistics from an equity curve.
+
+    Args:
+        equity_curve: pd.Series with DatetimeIndex and float values representing
+                      portfolio value over time.
+
+    Returns:
+        Dict with keys:
+            max_drawdown_pct, max_drawdown_start, max_drawdown_end,
+            max_drawdown_recovery, max_drawdown_duration_days,
+            calmar_ratio, current_drawdown_pct, time_underwater_pct,
+            avg_drawdown_pct
+    """
+    if equity_curve.empty or len(equity_curve) < 2:
+        return {
+            'max_drawdown_pct': 0.0,
+            'max_drawdown_start': None,
+            'max_drawdown_end': None,
+            'max_drawdown_recovery': None,
+            'max_drawdown_duration_days': 0,
+            'calmar_ratio': 0.0,
+            'current_drawdown_pct': 0.0,
+            'time_underwater_pct': 0.0,
+            'avg_drawdown_pct': 0.0,
+        }
+
+    equity = equity_curve.sort_index().astype(float)
+    running_max = equity.cummax()
+
+    # Drawdown series as negative percentages (0.0 means at peak)
+    drawdown_pct = (equity - running_max) / running_max * 100.0
+
+    # --- Max drawdown identification ---
+    max_dd_idx = drawdown_pct.idxmin()
+    max_dd_pct = float(drawdown_pct.loc[max_dd_idx])  # negative value
+
+    # Find the peak that precedes the trough
+    peak_value = running_max.loc[max_dd_idx]
+    # The peak date is the last date where equity equalled the running max
+    # before (or at) the trough date
+    pre_trough = equity.loc[:max_dd_idx]
+    peak_dates = pre_trough[pre_trough >= peak_value].index
+    max_dd_start = peak_dates[-1] if len(peak_dates) > 0 else equity.index[0]
+
+    max_dd_end = max_dd_idx
+
+    # Duration from peak to trough in calendar days
+    max_dd_duration = (max_dd_end - max_dd_start).days
+
+    # Recovery: first date after trough where equity >= peak_value
+    post_trough = equity.loc[max_dd_end:]
+    recovered = post_trough[post_trough >= peak_value]
+    max_dd_recovery = recovered.index[0] if len(recovered) > 0 else None
+    # If recovery date equals the trough itself and there are more dates after,
+    # that means the trough *is* back at peak (dd ~ 0), which is fine.
+
+    # --- Calmar ratio ---
+    # Annualized return: CAGR over the full curve period
+    total_days = (equity.index[-1] - equity.index[0]).days
+    if total_days > 0 and equity.iloc[0] > 0:
+        total_return = equity.iloc[-1] / equity.iloc[0]
+        annualized_return = (total_return ** (365.0 / total_days) - 1.0) * 100.0
+    else:
+        annualized_return = 0.0
+
+    if max_dd_pct != 0.0:
+        calmar = annualized_return / abs(max_dd_pct)
+    else:
+        calmar = 0.0
+
+    # --- Current drawdown ---
+    current_dd = float(drawdown_pct.iloc[-1])
+
+    # --- Time underwater ---
+    underwater_days = int((drawdown_pct < 0.0).sum())
+    time_underwater = (underwater_days / len(drawdown_pct)) * 100.0
+
+    # --- Average drawdown ---
+    # Average of all drawdown values (only the periods that are negative)
+    negative_dd = drawdown_pct[drawdown_pct < 0.0]
+    avg_dd = float(negative_dd.mean()) if len(negative_dd) > 0 else 0.0
+
+    return {
+        'max_drawdown_pct': max_dd_pct,
+        'max_drawdown_start': max_dd_start,
+        'max_drawdown_end': max_dd_end,
+        'max_drawdown_recovery': max_dd_recovery,
+        'max_drawdown_duration_days': max_dd_duration,
+        'calmar_ratio': calmar,
+        'current_drawdown_pct': current_dd,
+        'time_underwater_pct': time_underwater,
+        'avg_drawdown_pct': avg_dd,
+    }
+
+
+def calculate_transaction_costs(price: float, shares: float, side: str,
+                                spread_bps: float = 50,
+                                commission: float = 0.0) -> Dict:
+    """
+    Calculate transaction cost for a single trade, modelling bid-ask spread impact.
+
+    For junior miners the default spread is 50 bps (0.50%).  The spread is
+    split symmetrically around the mid-price:
+        ask = price * (1 + spread_bps / 20000)
+        bid = price * (1 - spread_bps / 20000)
+
+    Args:
+        price:      Mid-price of the security.
+        shares:     Number of shares traded (positive).
+        side:       'BUY' or 'SELL' (case-insensitive).
+        spread_bps: Bid-ask spread in basis points (default 50 = 0.50%).
+        commission: Flat commission per trade in dollars (default 0.0).
+
+    Returns:
+        Dict with keys:
+            execution_price: The effective fill price after spread.
+            cost:            Total dollar cost of the trade (spread + commission).
+            cost_pct:        Total cost as a percentage of notional value.
+            spread_impact:   Dollar cost attributable to the spread alone.
+    """
+    side_upper = side.strip().upper()
+    half_spread = spread_bps / 20000.0
+
+    if side_upper == 'BUY':
+        execution_price = price * (1.0 + half_spread)
+    elif side_upper == 'SELL':
+        execution_price = price * (1.0 - half_spread)
+    else:
+        raise ValueError(f"side must be 'BUY' or 'SELL', got '{side}'")
+
+    spread_impact = abs(execution_price - price) * shares
+    total_cost = spread_impact + commission
+
+    notional = price * shares
+    cost_pct = (total_cost / notional * 100.0) if notional > 0.0 else 0.0
+
+    return {
+        'execution_price': execution_price,
+        'cost': total_cost,
+        'cost_pct': cost_pct,
+        'spread_impact': spread_impact,
+    }
+
+
+def segment_by_regime(daily_df: pd.DataFrame,
+                      gold_hist: Optional[pd.DataFrame] = None) -> Dict:
+    """
+    Segment backtest results by gold-market regime and compute per-regime
+    performance statistics.
+
+    Regime classification (requires gold price history):
+        bull  : gold Close > 200-day MA  AND  50-day MA > 200-day MA
+        bear  : gold Close < 200-day MA  AND  50-day MA < 200-day MA
+        choppy: everything else
+
+    If *gold_hist* is not provided, all days are classified as 'unknown'.
+
+    Args:
+        daily_df:  DataFrame with columns [date, equity, cash, total_value]
+                   produced by the backtest simulation loop.
+        gold_hist: Optional DataFrame with a 'Close' column indexed by date
+                   (e.g. GLD ETF or GC=F futures data).
+
+    Returns:
+        Dict with keys 'bull', 'bear', 'choppy' (or 'unknown') each mapping
+        to a stats dict:
+            { days, annualized_return, sharpe, max_drawdown, win_rate,
+              avg_daily_return }
+        Plus a 'regime_series' key holding a pd.Series of regime labels
+        aligned with the daily_df dates.
+    """
+
+    df = daily_df.copy()
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.set_index('date').sort_index()
+    else:
+        df.index = pd.to_datetime(df.index)
+        df = df.sort_index()
+
+    # Build the regime series
+    if gold_hist is not None and not gold_hist.empty:
+        gold = gold_hist.copy()
+        if 'Close' not in gold.columns:
+            # Attempt common alternatives
+            for alt in ['Adj Close', 'close', 'adj_close']:
+                if alt in gold.columns:
+                    gold = gold.rename(columns={alt: 'Close'})
+                    break
+        if 'Close' not in gold.columns:
+            # Cannot classify -- fall back to unknown
+            regime_labels = pd.Series('unknown', index=df.index)
+        else:
+            gold.index = pd.to_datetime(gold.index)
+            gold = gold.sort_index()
+            ma200 = gold['Close'].rolling(window=200, min_periods=200).mean()
+            ma50 = gold['Close'].rolling(window=50, min_periods=50).mean()
+
+            regime_labels = pd.Series('choppy', index=gold.index)
+            bull_mask = (gold['Close'] > ma200) & (ma50 > ma200)
+            bear_mask = (gold['Close'] < ma200) & (ma50 < ma200)
+            regime_labels[bull_mask] = 'bull'
+            regime_labels[bear_mask] = 'bear'
+
+            # Reindex to match daily_df dates, forward-fill for any
+            # backtest dates missing from the gold series
+            regime_labels = regime_labels.reindex(df.index, method='ffill')
+            # Any remaining NaN (before first gold data) -> 'unknown'
+            regime_labels = regime_labels.fillna('unknown')
+    else:
+        regime_labels = pd.Series('unknown', index=df.index)
+
+    # Helper: compute stats for a subset of the equity curve
+    def _regime_stats(sub_df: pd.DataFrame) -> Dict:
+        n = len(sub_df)
+        if n < 2:
+            return {
+                'days': n,
+                'annualized_return': 0.0,
+                'sharpe': 0.0,
+                'max_drawdown': 0.0,
+                'win_rate': 0.0,
+                'avg_daily_return': 0.0,
+            }
+
+        tv = sub_df['total_value'].astype(float)
+        daily_returns = tv.pct_change().dropna()
+
+        # Annualized return
+        total_return = tv.iloc[-1] / tv.iloc[0] if tv.iloc[0] > 0 else 1.0
+        calendar_days = (tv.index[-1] - tv.index[0]).days
+        if calendar_days > 0 and total_return > 0:
+            ann_return = (total_return ** (365.0 / calendar_days) - 1.0) * 100.0
+        else:
+            ann_return = 0.0
+
+        # Sharpe (annualized, assuming 252 trading days, risk-free = 0)
+        if len(daily_returns) > 1 and daily_returns.std() > 0:
+            sharpe = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
+        else:
+            sharpe = 0.0
+
+        # Max drawdown
+        running_max = tv.cummax()
+        dd = (tv - running_max) / running_max * 100.0
+        max_dd = float(dd.min())
+
+        # Win rate: fraction of days with positive returns
+        if len(daily_returns) > 0:
+            win_rate = float((daily_returns > 0).sum()) / len(daily_returns) * 100.0
+        else:
+            win_rate = 0.0
+
+        avg_daily = float(daily_returns.mean() * 100.0) if len(daily_returns) > 0 else 0.0
+
+        return {
+            'days': n,
+            'annualized_return': ann_return,
+            'sharpe': float(sharpe),
+            'max_drawdown': max_dd,
+            'win_rate': win_rate,
+            'avg_daily_return': avg_daily,
+        }
+
+    # Compute stats for each regime present
+    result: Dict = {}
+    unique_regimes = regime_labels.unique()
+    for regime in unique_regimes:
+        mask = regime_labels == regime
+        sub = df.loc[mask]
+        if 'total_value' not in sub.columns:
+            # If the column is named differently, try equity + cash
+            if 'equity' in sub.columns and 'cash' in sub.columns:
+                sub = sub.copy()
+                sub['total_value'] = sub['equity'].astype(float) + sub['cash'].astype(float)
+            else:
+                result[regime] = _regime_stats(pd.DataFrame())
+                continue
+        result[regime] = _regime_stats(sub)
+
+    # Ensure the canonical regimes always appear in the output
+    for canonical in ('bull', 'bear', 'choppy'):
+        if canonical not in result:
+            result[canonical] = {
+                'days': 0,
+                'annualized_return': 0.0,
+                'sharpe': 0.0,
+                'max_drawdown': 0.0,
+                'win_rate': 0.0,
+                'avg_daily_return': 0.0,
+            }
+
+    result['regime_series'] = regime_labels
+    return result
+
+
 def run_backtest(args):
     """Main backtest execution"""
     # Initialize execution variance for Monte Carlo (0.0 = no variance, 0.15 = +/-15%)
