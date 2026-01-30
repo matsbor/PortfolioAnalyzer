@@ -123,54 +123,148 @@ def calculate_smc_structure(hist_data, ticker):
             result['structure'] = 'RANGING'
         
         # 3) DETECT BOS (Break of Structure)
+        # Buffer: 1.5% for juniors (higher volatility than large-caps)
+        BOS_BUFFER = 0.015
         current_price = df['Close'].iloc[-1]
-        
+
         if bullish_structure:
             # BOS up = price breaks above recent swing high
-            if current_price > result['last_swing_high'] * 1.001:
+            if current_price > result['last_swing_high'] * (1.0 + BOS_BUFFER):
                 result['event'] = 'BOS'
                 result['state'] = 'BULLISH'
                 result['confidence'] += 15
                 result['signals'].append('BOS ↑')
                 result['explanation'] = 'Bullish BOS - continuation likely'
-        
+
         elif bearish_structure:
             # BOS down = price breaks below recent swing low
-            if current_price < result['last_swing_low'] * 0.999:
+            if current_price < result['last_swing_low'] * (1.0 - BOS_BUFFER):
                 result['event'] = 'BOS'
                 result['state'] = 'BEARISH'
                 result['confidence'] -= 15
                 result['signals'].append('BOS ↓')
                 result['explanation'] = 'Bearish BOS - continuation likely'
-        
+
         # 4) DETECT CHOCH (Change of Character)
-        # Price breaks AGAINST existing structure = reversal warning
-        if bullish_structure and current_price < result['last_swing_low'] * 0.999:
-            result['event'] = 'CHOCH'
-            result['state'] = 'BEARISH'
-            result['confidence'] = 40  # Lower confidence on reversals
-            result['signals'].append('CHoCH ↓')
-            result['explanation'] = 'Change of Character - possible reversal'
-        
-        elif bearish_structure and current_price > result['last_swing_high'] * 1.001:
-            result['event'] = 'CHOCH'
-            result['state'] = 'BULLISH'
-            result['confidence'] = 40
-            result['signals'].append('CHoCH ↑')
-            result['explanation'] = 'Change of Character - possible reversal'
-        
-        # 5) LIQUIDITY SWEEPS (equal highs/lows taken)
-        # Check for equal highs (within 0.5%)
-        for i in range(len(swing_highs)-1):
-            for j in range(i+1, len(swing_highs)):
+        # Only fires if BOS was NOT already detected (BOS takes priority)
+        if result['event'] != 'BOS':
+            if bullish_structure and current_price < result['last_swing_low'] * (1.0 - BOS_BUFFER):
+                result['event'] = 'CHOCH'
+                result['state'] = 'BEARISH'
+                result['confidence'] = 40
+                result['signals'].append('CHoCH ↓')
+                result['explanation'] = 'Change of Character - possible reversal'
+
+            elif bearish_structure and current_price > result['last_swing_high'] * (1.0 + BOS_BUFFER):
+                result['event'] = 'CHOCH'
+                result['state'] = 'BULLISH'
+                result['confidence'] = 40
+                result['signals'].append('CHoCH ↑')
+                result['explanation'] = 'Change of Character - possible reversal'
+
+        # 5) ORDER BLOCKS — institutional supply/demand zones
+        # An order block is the last opposing candle before a strong move
+        order_blocks = []
+        for i in range(max(2, len(df) - 30), len(df) - 1):
+            body_i = df['Close'].iloc[i] - df['Open'].iloc[i]
+            body_next = df['Close'].iloc[i + 1] - df['Open'].iloc[i + 1]
+            # Bullish OB: bearish candle followed by strong bullish candle
+            if body_i < 0 and body_next > 0 and abs(body_next) > abs(body_i) * 1.5:
+                order_blocks.append({
+                    'type': 'bullish',
+                    'high': df['High'].iloc[i],
+                    'low': df['Low'].iloc[i],
+                    'index': i,
+                })
+            # Bearish OB: bullish candle followed by strong bearish candle
+            elif body_i > 0 and body_next < 0 and abs(body_next) > abs(body_i) * 1.5:
+                order_blocks.append({
+                    'type': 'bearish',
+                    'high': df['High'].iloc[i],
+                    'low': df['Low'].iloc[i],
+                    'index': i,
+                })
+
+        # Check if price is sitting in a bullish order block (support)
+        for ob in order_blocks:
+            if ob['type'] == 'bullish' and ob['low'] <= current_price <= ob['high']:
+                result['confidence'] += 8
+                result['signals'].append('Price at Bullish Order Block (demand zone)')
+                break
+        # Check if price is in a bearish order block (resistance)
+        for ob in order_blocks:
+            if ob['type'] == 'bearish' and ob['low'] <= current_price <= ob['high']:
+                result['confidence'] -= 8
+                result['signals'].append('Price at Bearish Order Block (supply zone)')
+                break
+
+        result['order_blocks'] = order_blocks
+
+        # 6) FAIR VALUE GAPS (FVG) — imbalances the market may revisit
+        fvgs = []
+        for i in range(2, len(df)):
+            high_prev = df['High'].iloc[i - 2]
+            low_curr = df['Low'].iloc[i]
+            low_prev = df['Low'].iloc[i - 2]
+            high_curr = df['High'].iloc[i]
+
+            # Bullish FVG: gap between bar[i-2] high and bar[i] low
+            if low_curr > high_prev:
+                fvgs.append({
+                    'type': 'bullish',
+                    'top': low_curr,
+                    'bottom': high_prev,
+                    'index': i,
+                })
+            # Bearish FVG: gap between bar[i] high and bar[i-2] low
+            elif high_curr < low_prev:
+                fvgs.append({
+                    'type': 'bearish',
+                    'top': low_prev,
+                    'bottom': high_curr,
+                    'index': i,
+                })
+
+        # Check if price is filling a recent FVG (last 10 bars)
+        recent_fvgs = [f for f in fvgs if f['index'] >= len(df) - 10]
+        for fvg in recent_fvgs:
+            if fvg['type'] == 'bullish' and fvg['bottom'] <= current_price <= fvg['top']:
+                result['signals'].append('Filling Bullish FVG (potential support)')
+                result['confidence'] += 5
+                break
+        for fvg in recent_fvgs:
+            if fvg['type'] == 'bearish' and fvg['bottom'] <= current_price <= fvg['top']:
+                result['signals'].append('Filling Bearish FVG (potential resistance)')
+                result['confidence'] -= 5
+                break
+
+        result['fvgs'] = len(fvgs)
+
+        # 7) LIQUIDITY SWEEPS — equal highs/lows taken (includes low-side)
+        # High-side sweeps (existing)
+        for i in range(len(swing_highs) - 1):
+            for j in range(i + 1, len(swing_highs)):
                 if abs(swing_highs[i]['price'] - swing_highs[j]['price']) / swing_highs[i]['price'] < 0.005:
-                    # Check if price swept it (went above then came back)
                     max_high = df['High'].iloc[swing_highs[j]['index']:].max()
-                    if max_high > swing_highs[i]['price'] * 1.001:
-                        result['signals'].append('Liquidity Sweep (high)')
-                        # Sweep often precedes reversal
+                    if max_high > swing_highs[i]['price'] * (1.0 + BOS_BUFFER):
+                        result['signals'].append('Liquidity Sweep (high-side)')
                         if result['structure'] == 'BULLISH_STRUCTURE':
-                            result['confidence'] -= 5  # Warning sign
+                            result['confidence'] -= 5
+
+        # Low-side sweeps — equal lows taken then price reverses up
+        for i in range(len(swing_lows) - 1):
+            for j in range(i + 1, len(swing_lows)):
+                if swing_lows[i]['price'] > 0 and abs(swing_lows[i]['price'] - swing_lows[j]['price']) / swing_lows[i]['price'] < 0.005:
+                    # Price dipped below equal lows then recovered
+                    min_low = df['Low'].iloc[swing_lows[j]['index']:].min()
+                    if min_low < swing_lows[i]['price'] * (1.0 - BOS_BUFFER):
+                        # And current price is back above
+                        if current_price > swing_lows[i]['price']:
+                            result['signals'].append('Liquidity Sweep (low-side) + reclaim — bullish')
+                            result['confidence'] += 10
+                        else:
+                            result['signals'].append('Liquidity Sweep (low-side) — bearish breakdown')
+                            result['confidence'] -= 10
         
         # 6) NORMALIZE CONFIDENCE
         result['confidence'] = np.clip(result['confidence'], 0, 100)
@@ -1220,11 +1314,19 @@ def calculate_multi_timeframe_alignment(hist, symbol=''):
         state = smc_result.get('state', 'NEUTRAL').lower()
         confidence = smc_result.get('confidence', 50)
 
-        if 'bull' in state or confidence > 60:
+        # State takes priority. Confidence only matters if state is directional.
+        # This prevents a NEUTRAL state with confidence=65 (from a single +15
+        # bump) from being falsely classified as bullish.
+        if 'bull' in state:
             return 'bullish'
-        elif 'bear' in state or confidence < 40:
+        elif 'bear' in state:
             return 'bearish'
         else:
+            # State is neutral — use confidence only with wider band
+            if confidence >= 70:
+                return 'bullish'
+            elif confidence <= 30:
+                return 'bearish'
             return 'neutral'
 
     daily_trend = _classify_trend(daily_smc)

@@ -21,9 +21,14 @@ except ImportError:
     yf = None
 
 # MODEL GOVERNANCE - Define model roles and caps
+# V8.0: Aligned with actual model implementations in calculate_alpha_models()
 MODEL_ROLES = {
     'Alpha': {
-        'models': ['M1_Momentum', 'M2_Value', 'M3_Relative', 'M4_Volatility', 'M5_Benchmark', 'M6_Discovery', 'M7_SMC'],
+        'models': [
+            'M1_Momentum', 'M2_Value', 'M3_Survival', 'M4_Dilution',
+            'M5_Liquidity', 'M6_RelStrength', 'M7_SMC', 'M8_StageFit',
+            'M9_VolMomentum', 'M10_TA', 'M11_FA',
+        ],
         'role': 'recommend',
         'weight_cap': 100.0
     },
@@ -397,7 +402,8 @@ def calculate_data_confidence(fund_dict, info_dict, inferred_flags):
         breakdown.append("✅ Has revenue data (+10)")
     
     if info_dict.get('totalCash'):
-        breakdown.append("✅ Has cash data")
+        score += 10
+        breakdown.append("✅ Has cash data (+10)")
     
     score = max(0, min(100, score))
     
@@ -521,184 +527,230 @@ def tag_news(news_items):
 
 def calculate_alpha_models(row, hist_data, benchmark_data):
     """
-    Calculate 6-model alpha score
-    NOTE: Model 7 (SMC) will be added to this score AFTER SMC calculation
+    V8.0: 11-model alpha scoring system.
+    Weights normalized to exactly 100%.
+
+    Model architecture:
+      M1  Momentum           15%  - Multi-timeframe momentum (30d + 90d + RSI)
+      M2  Value              10%  - Mean-reversion from 52w high + P/B signal
+      M3  Survival           15%  - Runway quality (no confidence multiplier)
+      M4  Dilution           10%  - Inverse of dilution risk
+      M5  Liquidity           5%  - Tier-based (L0–L3)
+      M6  RelStrength         7%  - 90d stock vs benchmark outperformance
+      M7  SMC                 8%  - Smart Money Concepts (set later)
+      M8  StageFit            5%  - Stage + metal regime alignment
+      M9  VolMomentum         7%  - Volatility/RSI trend assessment
+      M10 TA                  8%  - Technical Analysis composite (from calculate_all_ta)
+      M11 FA                 10%  - Fundamental Analysis score
+                            ----
+                            100%
+
+    NOTE: M7 (SMC) placeholder is replaced after SMC calculation.
+    M10 (TA) and M11 (FA) use pre-computed scores from the row when available.
     """
     models = {}
     breakdown = []
-    
-    # M1: Momentum (20%)
+
+    # === M1: Momentum (15%) — multi-timeframe + RSI ===========================
     ret_30d = row.get('Return_30d', 0)
     ret_90d = row.get('Return_90d', 0)
-    
-    momentum_score = 50
-    if ret_30d > 10:
-        momentum_score = 75
-    elif ret_30d > 5:
-        momentum_score = 65
-    elif ret_30d < -10:
-        momentum_score = 25
-    elif ret_30d < -5:
-        momentum_score = 35
-    
-    models['M1_Momentum'] = momentum_score * 0.20
-    breakdown.append(f"M1 Momentum: {momentum_score}/100 × 20% = {models['M1_Momentum']:.1f}")
-    
-    # M2: Value Positioning (15%)
+    rsi_val = row.get('RSI', 50)
+
+    # Continuous 30d scoring (no step-function dead zones)
+    if ret_30d >= 20:
+        m1_30d = 90
+    elif ret_30d >= 10:
+        m1_30d = 70 + (ret_30d - 10) * 2  # 70-90
+    elif ret_30d >= 0:
+        m1_30d = 50 + ret_30d * 2           # 50-70
+    elif ret_30d >= -10:
+        m1_30d = 50 + ret_30d * 2           # 30-50
+    elif ret_30d >= -20:
+        m1_30d = 30 + (ret_30d + 10) * 2   # 10-30
+    else:
+        m1_30d = 10
+
+    # 90d trend confirmation (+/- adjustment)
+    if ret_90d > 15:
+        m1_90d_adj = 10
+    elif ret_90d > 5:
+        m1_90d_adj = 5
+    elif ret_90d < -15:
+        m1_90d_adj = -10
+    elif ret_90d < -5:
+        m1_90d_adj = -5
+    else:
+        m1_90d_adj = 0
+
+    # RSI adjustment
+    if rsi_val < 30:
+        m1_rsi_adj = 8   # Oversold bounce opportunity
+    elif rsi_val > 70:
+        m1_rsi_adj = -5  # Overbought caution
+    elif rsi_val > 50:
+        m1_rsi_adj = 3   # Bullish momentum
+    else:
+        m1_rsi_adj = 0
+
+    momentum_score = max(0, min(100, m1_30d + m1_90d_adj + m1_rsi_adj))
+    models['M1_Momentum'] = momentum_score * 0.15
+    breakdown.append(f"M1 Momentum: {momentum_score}/100 x 15% = {models['M1_Momentum']:.1f} (30d:{ret_30d:+.1f}%, 90d:{ret_90d:+.1f}%, RSI:{rsi_val:.0f})")
+
+    # === M2: Value Positioning (10%) — distance from high + P/B ===============
     pct_from_high = row.get('Pct_From_52w_High', 0)
-    
-    value_score = 50
-    if pct_from_high < -40:
-        value_score = 80
-    elif pct_from_high < -25:
-        value_score = 65
-    elif pct_from_high > -5:
-        value_score = 30
-    
-    models['M2_Value'] = value_score * 0.15
-    breakdown.append(f"M2 Value: {value_score}/100 × 15% = {models['M2_Value']:.1f}")
-    
-    # M3: Survival Quality (20%)
+
+    # Continuous scoring (no dead zones)
+    if pct_from_high <= -50:
+        m2_price = 90
+    elif pct_from_high <= -25:
+        m2_price = 60 + (-pct_from_high - 25) * 1.2  # 60-90
+    elif pct_from_high <= -10:
+        m2_price = 45 + (-pct_from_high - 10) * 1.0  # 45-60
+    elif pct_from_high <= -5:
+        m2_price = 40 + (-pct_from_high - 5) * 1.0   # 40-45
+    else:
+        m2_price = max(15, 40 + pct_from_high * 5)    # 15-40
+
+    # P/B bonus (from FA data if available)
+    pb = row.get('P_B', None)
+    m2_pb_adj = 0
+    if pb is not None and isinstance(pb, (int, float)) and pb > 0:
+        if pb < 1.0:
+            m2_pb_adj = 10   # Trading below book value
+        elif pb < 2.0:
+            m2_pb_adj = 5
+        elif pb > 5.0:
+            m2_pb_adj = -5
+
+    value_score = max(0, min(100, m2_price + m2_pb_adj))
+    models['M2_Value'] = value_score * 0.10
+    breakdown.append(f"M2 Value: {value_score}/100 x 10% = {models['M2_Value']:.1f} (from_high:{pct_from_high:+.1f}%)")
+
+    # === M3: Survival Quality (15%) — runway only, NO confidence multiplier ===
     runway = row.get('Runway', 12)
-    data_conf = row.get('Data_Confidence', 50)
-    
-    survival_score = 50
-    if runway >= 18:
-        survival_score = 80
+
+    # Continuous scoring
+    if runway >= 24:
+        survival_score = 90
+    elif runway >= 18:
+        survival_score = 75 + (runway - 18) * 2.5    # 75-90
     elif runway >= 12:
-        survival_score = 65
-    elif runway < 6:
-        survival_score = 20
-    
-    # Adjust by data confidence
-    survival_score = survival_score * (data_conf / 100)
-    
-    models['M3_Survival'] = survival_score * 0.20
-    breakdown.append(f"M3 Survival: {survival_score:.0f}/100 × 20% = {models['M3_Survival']:.1f}")
-    
-    # M4: Dilution Penalty (13%)
+        survival_score = 60 + (runway - 12) * 2.5    # 60-75
+    elif runway >= 6:
+        survival_score = 30 + (runway - 6) * 5.0     # 30-60
+    else:
+        survival_score = max(5, runway * 5)            # 0-30
+
+    models['M3_Survival'] = survival_score * 0.15
+    breakdown.append(f"M3 Survival: {survival_score:.0f}/100 x 15% = {models['M3_Survival']:.1f} (Runway:{runway:.1f}mo)")
+
+    # === M4: Dilution Penalty (10%) ===========================================
     dil_risk = row.get('Dilution_Risk_Score', 50)
-    dilution_score = 100 - dil_risk
-    
-    models['M4_Dilution'] = dilution_score * 0.13
-    breakdown.append(f"M4 Dilution: {dilution_score:.0f}/100 × 13% = {models['M4_Dilution']:.1f}")
-    
-    # M5: Liquidity (8%)
+    dilution_score = max(0, min(100, 100 - dil_risk))
+
+    models['M4_Dilution'] = dilution_score * 0.10
+    breakdown.append(f"M4 Dilution: {dilution_score:.0f}/100 x 10% = {models['M4_Dilution']:.1f}")
+
+    # === M5: Liquidity (5%) ==================================================
     tier = row.get('Liq_tier_code', 'L0')
-    liq_score = {'L3': 90, 'L2': 70, 'L1': 50, 'L0': 20}.get(tier, 50)
-    
-    models['M5_Liquidity'] = liq_score * 0.08
-    breakdown.append(f"M5 Liquidity: {liq_score}/100 × 8% = {models['M5_Liquidity']:.1f}")
-    
-    # M6: Relative Strength (8%)
+    liq_score = {'L3': 85, 'L2': 65, 'L1': 45, 'L0': 15, 'UNKNOWN': 30}.get(tier, 30)
+
+    models['M5_Liquidity'] = liq_score * 0.05
+    breakdown.append(f"M5 Liquidity: {liq_score}/100 x 5% = {models['M5_Liquidity']:.1f} ({tier})")
+
+    # === M6: Relative Strength (7%) ==========================================
     rel_score = 50
     if benchmark_data is not None and not hist_data.empty:
         try:
-            stock_ret = ((hist_data['Close'].iloc[-1] - hist_data['Close'].iloc[-90]) / 
-                        hist_data['Close'].iloc[-90] * 100) if len(hist_data) >= 90 else 0
-            bench_ret = ((benchmark_data['Close'].iloc[-1] - benchmark_data['Close'].iloc[-90]) / 
-                        benchmark_data['Close'].iloc[-90] * 100) if len(benchmark_data) >= 90 else 0
-            
-            outperformance = stock_ret - bench_ret
-            if outperformance > 10:
-                rel_score = 80
-            elif outperformance > 0:
-                rel_score = 60
-            elif outperformance < -10:
-                rel_score = 30
+            n = min(90, len(hist_data) - 1, len(benchmark_data) - 1)
+            if n >= 20:
+                stock_ret = (hist_data['Close'].iloc[-1] / hist_data['Close'].iloc[-n] - 1) * 100
+                bench_ret = (benchmark_data['Close'].iloc[-1] / benchmark_data['Close'].iloc[-n] - 1) * 100
+                outperformance = stock_ret - bench_ret
+                # Continuous scoring
+                rel_score = max(10, min(90, 50 + outperformance * 2))
         except Exception:
             pass
-    
-    models['M6_RelStrength'] = rel_score * 0.08
-    breakdown.append(f"M6 RelStrength: {rel_score}/100 × 8% = {models['M6_RelStrength']:.1f}")
-    
-    # M7: SMC (8%) - will be added later after SMC calculation
-    # For now, use neutral 50
+
+    models['M6_RelStrength'] = rel_score * 0.07
+    breakdown.append(f"M6 RelStrength: {rel_score:.0f}/100 x 7% = {models['M6_RelStrength']:.1f}")
+
+    # === M7: SMC (8%) — placeholder, replaced after SMC calculation ===========
     models['M7_SMC'] = 50 * 0.08
-    breakdown.append(f"M7 SMC: 50/100 × 8% = {models['M7_SMC']:.1f} (calculated later)")
-    
-    # M8: Stage/Metal Fit (8%)
+    breakdown.append(f"M7 SMC: 50/100 x 8% = {models['M7_SMC']:.1f} (recalculated later)")
+
+    # === M8: Stage/Metal Fit (5%) — stage + metal regime alignment ============
     stage = row.get('stage', 'Explorer')
     metal = row.get('metal', 'Gold')
-    
-    stage_score = 50
-    if stage == 'Producer':
-        stage_score = 70
-    elif stage == 'Developer':
-        stage_score = 60
-    
-    models['M8_StageFit'] = stage_score * 0.08
-    breakdown.append(f"M8 StageFit: {stage_score}/100 × 8% = {models['M8_StageFit']:.1f}")
-    
-    # M9: V7.5 Volatility/Momentum Risk Assessment (8%)
-    # Do NOT penalize High Beta (> 1.5)
-    # Treat High Volatility + Upward Momentum (RSI > 50) as BUY signal
-    # Only penalize volatility if trend is Down (Price < SMA200)
+    metal_regime = row.get('Metal_Regime', 'neutral')
+
+    stage_base = {'Producer': 65, 'Developer': 55}.get(stage, 50)
+    # Metal regime alignment: if the stock's metal is in a bull regime, boost
+    metal_adj = 0
+    if isinstance(metal_regime, str):
+        if 'bull' in metal_regime.lower():
+            metal_adj = 15
+        elif 'bear' in metal_regime.lower():
+            metal_adj = -10
+    # Explorer bonus in bull regime (high torque)
+    if stage == 'Explorer' and metal_adj > 0:
+        metal_adj += 10
+
+    stage_score = max(0, min(100, stage_base + metal_adj))
+    models['M8_StageFit'] = stage_score * 0.05
+    breakdown.append(f"M8 StageFit: {stage_score}/100 x 5% = {models['M8_StageFit']:.1f} ({stage}/{metal})")
+
+    # === M9: Vol/Momentum Risk Assessment (7%) ================================
     volatility = row.get('Volatility_60d', 0)
-    rsi = row.get('RSI', 50)  # Default to neutral if not available
     current_price = row.get('Price', 0)
     sma200 = row.get('MA200', 0)
-    beta = row.get('Beta', 1.0)  # Default to 1.0 if not available
-    
-    vol_momentum_score = 50  # Neutral baseline
-    
-    # Calculate RSI if not available (simple approximation)
-    if rsi == 50 and not hist_data.empty and len(hist_data) >= 14:
-        try:
-            delta = hist_data['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
-            rsi = float(rsi.iloc[-1]) if not rsi.empty else 50
-        except Exception:
-            rsi = 50
-    
-    # V7.5: High Beta (> 1.5) is NOT penalized
-    # Instead, check volatility + momentum combination
+
+    vol_momentum_score = 50
     if volatility > 0 and sma200 > 0:
-        # Check if trend is down (Price < SMA200)
         trend_down = current_price < sma200
-        
         if trend_down:
-            # Downward trend: Penalize high volatility
             if volatility > 50:
                 vol_momentum_score = 20
             elif volatility > 30:
                 vol_momentum_score = 35
             else:
-                vol_momentum_score = 50
-            breakdown.append(f"M9 Vol/Momentum: Down trend (Price < SMA200), Vol {volatility:.1f}%: {vol_momentum_score}/100")
+                vol_momentum_score = 45
         else:
-            # Upward or neutral trend
-            if rsi > 50 and volatility > 30:
-                # High Volatility + Upward Momentum = BUY signal
+            if rsi_val > 50 and volatility > 30:
                 vol_momentum_score = 80
-                breakdown.append(f"M9 Vol/Momentum: High Vol {volatility:.1f}% + Upward Momentum (RSI {rsi:.0f} > 50) = BUY: {vol_momentum_score}/100")
-            elif rsi > 50:
-                # Upward momentum, normal volatility
+            elif rsi_val > 50:
                 vol_momentum_score = 70
-                breakdown.append(f"M9 Vol/Momentum: Upward Momentum (RSI {rsi:.0f} > 50): {vol_momentum_score}/100")
             elif volatility > 50:
-                # High volatility but no upward momentum
                 vol_momentum_score = 40
-                breakdown.append(f"M9 Vol/Momentum: High Vol {volatility:.1f}% but no upward momentum: {vol_momentum_score}/100")
             else:
-                vol_momentum_score = 50
-                breakdown.append(f"M9 Vol/Momentum: Normal conditions: {vol_momentum_score}/100")
-    else:
-        breakdown.append(f"M9 Vol/Momentum: Insufficient data (Vol: {volatility:.1f}%, SMA200: {sma200:.2f}): {vol_momentum_score}/100")
-    
-    # Note: Beta is tracked but NOT used for penalty (as per V7.5 requirements)
-    if beta > 1.5:
-        breakdown.append(f"ℹ️ High Beta {beta:.2f} > 1.5 (NOT penalized per V7.5)")
-    
-    models['M9_VolMomentum'] = vol_momentum_score * 0.08
-    breakdown.append(f"M9 Vol/Momentum: {vol_momentum_score}/100 × 8% = {models['M9_VolMomentum']:.1f}")
-    
-    # Calculate total (before SMC adjustment)
+                vol_momentum_score = 55
+
+    models['M9_VolMomentum'] = vol_momentum_score * 0.07
+    breakdown.append(f"M9 VolMomentum: {vol_momentum_score}/100 x 7% = {models['M9_VolMomentum']:.1f}")
+
+    # === M10: Technical Analysis Composite (8%) ===============================
+    # Uses pre-computed TA_Score from technical_analysis.py (0-100, 50=neutral)
+    ta_score_raw = row.get('TA_Score', 50)
+    if not isinstance(ta_score_raw, (int, float)):
+        ta_score_raw = 50
+    ta_score = max(0, min(100, float(ta_score_raw)))
+
+    models['M10_TA'] = ta_score * 0.08
+    breakdown.append(f"M10 TA: {ta_score:.0f}/100 x 8% = {models['M10_TA']:.1f} (RSI/MACD/BB/OBV/ADX)")
+
+    # === M11: Fundamental Analysis Score (10%) ================================
+    # Uses pre-computed FA_Score from calculate_fundamental_score()
+    fa_score_raw = row.get('FA_Score', 50)
+    if not isinstance(fa_score_raw, (int, float)):
+        fa_score_raw = 50
+    fa_score = max(0, min(100, float(fa_score_raw)))
+
+    models['M11_FA'] = fa_score * 0.10
+    breakdown.append(f"M11 FA: {fa_score:.0f}/100 x 10% = {models['M11_FA']:.1f} (Piotroski/AISC/P-B)")
+
+    # === Total ================================================================
     alpha_score = sum(models.values())
-    
+
     return {
         'alpha_score': alpha_score,
         'models': models,
@@ -985,22 +1037,37 @@ def detect_market_buzz(hist_data: pd.DataFrame, threshold_multiplier: float = 3.
 
 
 def calculate_sell_risk(row, hist_data, ma50, ma200, news_items, macro_regime):
-    """Calculate sell risk with triggers"""
+    """
+    Calculate sell risk with comprehensive triggers.
+
+    Hard triggers (high-conviction sell signals):
+    - Runway < 6 months (cash crisis imminent)
+    - Below MA200 in defensive macro
+    - Death cross (MA50 < MA200) — institutional distribution signal
+    - Gap-down > 10% (catastrophic event)
+
+    Soft triggers (warning signals that accumulate):
+    - Drawdown > 50%, 30d return < -20%
+    - >10% below MA50, RSI overbought (unless SMC bullish)
+    - Volume distribution (declining volume on up days)
+    - Consecutive decline (5+ days)
+    - Negative news (expanded keyword list)
+    """
     score = 0
     hard_triggers = []
     soft_triggers = []
-    
+
     runway = row.get('Runway', 12)
     price = row.get('Price', 0)
     ret_7d = row.get('Return_7d', 0)
     ret_30d = row.get('Return_30d', 0)
     drawdown = abs(row.get('Drawdown_90d', 0))
-    
-    # Hard triggers
+
+    # ── Hard triggers ──
     if runway < 6:
         score += 50
         hard_triggers.append(f"💀 Runway {runway:.1f}mo < 6mo CRITICAL")
-    
+
     if ma200 > 0 and price < ma200:
         if macro_regime.get('regime') == 'DEFENSIVE':
             score += 30
@@ -1008,44 +1075,103 @@ def calculate_sell_risk(row, hist_data, ma50, ma200, news_items, macro_regime):
         else:
             score += 15
             soft_triggers.append("⚠️ Below MA200")
-    
-    # Soft triggers
+
+    # Death cross: MA50 crosses below MA200 — institutional exit signal
+    if ma50 > 0 and ma200 > 0 and ma50 < ma200:
+        score += 20
+        hard_triggers.append("💀 Death cross (MA50 < MA200)")
+
+    # Gap-down detection: catastrophic single-day drop
+    if hist_data is not None and len(hist_data) >= 2:
+        try:
+            prev_close = hist_data['Close'].iloc[-2]
+            curr_open = hist_data['Open'].iloc[-1] if 'Open' in hist_data.columns else price
+            if prev_close > 0:
+                gap_pct = (prev_close - curr_open) / prev_close * 100
+                if gap_pct > 10:
+                    score += 25
+                    hard_triggers.append(f"💀 Gap-down {gap_pct:.1f}% (catastrophic)")
+                elif gap_pct > 5:
+                    score += 10
+                    soft_triggers.append(f"⚠️ Gap-down {gap_pct:.1f}%")
+        except (IndexError, KeyError):
+            pass
+
+    # ── Soft triggers ──
     if drawdown > 50:
         score += 15
         soft_triggers.append(f"⚠️ Drawdown {drawdown:.0f}% > 50%")
-    
+
     if ret_30d < -20:
         score += 10
         soft_triggers.append(f"⚠️ 30d return {ret_30d:.0f}% < -20%")
-    
+
     if ma50 > 0 and price < ma50 * 0.90:
         score += 10
         soft_triggers.append("⚠️ >10% below MA50")
-    
+
+    # Consecutive decline: 5+ red days in a row = distribution
+    if hist_data is not None and len(hist_data) >= 5:
+        try:
+            recent_closes = hist_data['Close'].tail(6).values
+            consecutive_down = 0
+            for k in range(1, len(recent_closes)):
+                if recent_closes[k] < recent_closes[k - 1]:
+                    consecutive_down += 1
+                else:
+                    consecutive_down = 0
+            if consecutive_down >= 5:
+                score += 15
+                soft_triggers.append(f"⚠️ {consecutive_down} consecutive down days")
+            elif consecutive_down >= 3:
+                score += 5
+                soft_triggers.append(f"⚠️ {consecutive_down} consecutive down days")
+        except (IndexError, KeyError):
+            pass
+
+    # Volume distribution: declining volume on up days vs rising volume on down days
+    if hist_data is not None and len(hist_data) >= 20 and 'Volume' in hist_data.columns:
+        try:
+            recent = hist_data.tail(20)
+            changes = recent['Close'].diff()
+            up_days = recent[changes > 0]
+            down_days = recent[changes < 0]
+            if len(up_days) > 0 and len(down_days) > 0:
+                avg_up_vol = up_days['Volume'].mean()
+                avg_down_vol = down_days['Volume'].mean()
+                if avg_up_vol > 0 and avg_down_vol / avg_up_vol > 1.5:
+                    score += 10
+                    soft_triggers.append("⚠️ Volume distribution (heavy selling)")
+        except (IndexError, KeyError):
+            pass
+
     # Volatility Harvesting: Ignore RSI overbought signals if SMC_Bias is strongly BULLISH
-    # Check for RSI overbought (typically > 70) - but only if SMC_Bias is NOT strongly BULLISH
-    rsi = row.get('RSI', 50)  # Default to neutral if not available
+    rsi = row.get('RSI', 50)
     smc_bias = row.get('SMC_Bias', 'Neutral')
     is_strongly_bullish_smc = 'BULLISH' in str(smc_bias).upper() and 'STRONG' in str(smc_bias).upper()
-    
-    # Only flag RSI overbought if SMC is not strongly bullish
+
     if rsi > 70 and not is_strongly_bullish_smc:
         score += 5
         soft_triggers.append(f"⚠️ RSI {rsi:.0f} > 70 (overbought)")
     elif rsi > 70 and is_strongly_bullish_smc:
-        # Ignore overbought signal - this is where gains often start in junior miners
         soft_triggers.append(f"✅ RSI {rsi:.0f} > 70 but SMC strongly BULLISH - ignoring overbought")
-    
-    # News triggers
+
+    # News triggers — expanded keyword set for mining sector
+    _neg_news_keywords = [
+        'low cash', 'needs financing', 'suspends', 'lawsuit', 'permit denied',
+        'management departure', 'ceo resigns', 'cfo resigns', 'accident', 'spill',
+        'regulatory', 'delisted', 'halt', 'investigation', 'fraud', 'bankruptcy',
+        'dilution', 'write-down', 'impairment', 'downgrade', 'default',
+    ]
     for item in news_items:
         title_lower = item.get('title', '').lower()
-        if any(word in title_lower for word in ['low cash', 'needs financing', 'suspends']):
+        if any(kw in title_lower for kw in _neg_news_keywords):
             score += 15
             soft_triggers.append(f"⚠️ Negative news: {item['title'][:50]}")
             break
-    
+
     score = min(100, score)
-    
+
     if score >= 60:
         verdict = "SELL NOW"
     elif score >= 40:
@@ -1054,9 +1180,9 @@ def calculate_sell_risk(row, hist_data, ma50, ma200, news_items, macro_regime):
         verdict = "WATCH"
     else:
         verdict = "NORMAL"
-    
+
     all_triggers = hard_triggers + soft_triggers
-    
+
     return {
         'score': score,
         'verdict': verdict,
@@ -1347,18 +1473,67 @@ def calculate_macro_regime(hist_slice: pd.DataFrame = None, date_ts: pd.Timestam
                 regime['regime'] = 'RISK-ON'
                 regime['factors'].append(f"VIX {vix_price:.1f} < 15 (risk-on)")
         
-        # Gold trend
+        # Gold trend — check both MA50 and MA200
         gold = yf.Ticker("GC=F")
-        gold_hist = gold.history(period="6mo")
+        gold_hist = gold.history(period="1y")
         if not gold_hist.empty and len(gold_hist) >= 50:
             gold_ma50 = gold_hist['Close'].tail(50).mean()
             gold_price = gold_hist['Close'].iloc[-1]
-            
+
             if gold_price > gold_ma50 * 1.05:
                 regime['factors'].append("Gold above MA50 (bullish)")
             elif gold_price < gold_ma50 * 0.95:
                 regime['factors'].append("Gold below MA50 (bearish)")
                 regime['throttle_factor'] *= 0.9
+
+            # Gold MA200 — long-term trend (critical for miners)
+            if len(gold_hist) >= 200:
+                gold_ma200 = gold_hist['Close'].tail(200).mean()
+                regime['gold_ma200'] = gold_ma200
+                if gold_price > gold_ma200:
+                    regime['factors'].append("Gold above MA200 (long-term bullish)")
+                else:
+                    regime['factors'].append("Gold below MA200 (long-term bearish)")
+                    regime['throttle_factor'] *= 0.85
+
+                # Gold death cross (MA50 < MA200) — sector-wide sell signal
+                if gold_ma50 < gold_ma200:
+                    regime['factors'].append("⚠️ Gold death cross (MA50 < MA200)")
+                    regime['throttle_factor'] *= 0.8
+                    if regime['regime'] not in ('DEFENSIVE',):
+                        regime['regime'] = 'CAUTIOUS'
+
+            # ETF flow proxy: GLD volume trend (20d avg vs 50d avg)
+            try:
+                gld = yf.Ticker("GLD")
+                gld_hist = gld.history(period="3mo")
+                if not gld_hist.empty and len(gld_hist) >= 50:
+                    gld_vol_20 = gld_hist['Volume'].tail(20).mean()
+                    gld_vol_50 = gld_hist['Volume'].tail(50).mean()
+                    if gld_vol_50 > 0:
+                        vol_ratio = gld_vol_20 / gld_vol_50
+                        if vol_ratio > 1.3:
+                            regime['factors'].append(f"GLD volume surge ({vol_ratio:.1f}x avg — institutional interest)")
+                        elif vol_ratio < 0.7:
+                            regime['factors'].append(f"GLD volume drought ({vol_ratio:.1f}x avg — low interest)")
+                            regime['throttle_factor'] *= 0.95
+            except Exception:
+                pass
+
+        # Real rates proxy: TIP (TIPS ETF) trend
+        try:
+            tip = yf.Ticker("TIP")
+            tip_hist = tip.history(period="3mo")
+            if not tip_hist.empty and len(tip_hist) >= 20:
+                tip_price = tip_hist['Close'].iloc[-1]
+                tip_ma20 = tip_hist['Close'].tail(20).mean()
+                if tip_price < tip_ma20 * 0.98:
+                    regime['factors'].append("Real rates rising (TIP falling — headwind for gold)")
+                    regime['throttle_factor'] *= 0.9
+                elif tip_price > tip_ma20 * 1.02:
+                    regime['factors'].append("Real rates falling (TIP rising — tailwind for gold)")
+        except Exception:
+            pass
 
     except Exception:
         pass
@@ -1790,54 +1965,62 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
         sell_exit_threshold = 50  # Higher threshold during bull = less sensitive exits
         decision['warnings'].append(f"🐂 Bull regime: Exit threshold raised to {sell_exit_threshold} (reduced shakeout risk)")
     
-    # Alpha model recommendations (only if not vetoed)
-    if sell_score >= sell_exit_threshold:
+    # V8.0: Fixed arbitration logic.
+    # Priority order:
+    #   1. Discovery exception (if active and alpha >= 45) — sticky, not overridable
+    #   2. Hard sell signals (sell_score >= sell_exit_threshold) — veto everything
+    #   3. Moderate sell signals (sell_score >= soft_caution_threshold) — reduce, don't avoid
+    #   4. Alpha-based buy (alpha >= strong_buy or buy_threshold)
+    #   5. Default HOLD
+
+    # Discovery exception is STICKY — not overridden by moderate sell risk
+    if discovery_active and discovery_reason and alpha_score_for_decision >= 45:
+        # Already set above, keep it. Only a hard sell veto can override.
+        if sell_score >= sell_exit_threshold:
+            # Hard sell overrides even discovery
+            decision['action'] = 'Avoid'
+            decision['confidence'] = 'High'
+            decision['recommended_pct'] = current_pct * 0.5
+            decision['reasoning'].extend(sell_risk.get('soft_triggers', [])[:2])
+            decision['primary_gating_reason'] = f"Hard sell overrides discovery: sell risk {sell_score}/100 >= {sell_exit_threshold}"
+        # else: keep the Buy from discovery exception above
+
+    elif sell_score >= sell_exit_threshold:
+        # Hard sell signal — veto
         decision['action'] = 'Avoid'
         decision['confidence'] = 'High'
         decision['recommended_pct'] = current_pct * 0.5
-        decision['reasoning'].extend(sell_risk['soft_triggers'][:2])
-        decision['primary_gating_reason'] = f"Risk signals: Sell risk {sell_score}/100"
-    
-    elif sell_score >= sell_exit_threshold:  # Use the threshold set above (30 for AGGRESSIVE, 40 default, 50 for bull)
-        decision['action'] = 'Avoid'
-        decision['confidence'] = 'High'
-        decision['recommended_pct'] = current_pct * 0.5
-        decision['reasoning'].extend(sell_risk['soft_triggers'][:2] if 'soft_triggers' in sell_risk else [])
-        decision['primary_gating_reason'] = f"Risk signals: Sell risk {sell_score}/100 (threshold: {sell_exit_threshold})"
-    
-    elif sell_score >= 20:
-        decision['action'] = 'Avoid'
+        decision['reasoning'].extend(sell_risk.get('soft_triggers', [])[:2])
+        decision['primary_gating_reason'] = f"Risk signals: Sell risk {sell_score}/100 >= threshold {sell_exit_threshold}"
+
+    elif sell_score >= 40:
+        # Moderate sell risk — REDUCE, don't avoid (was: sell_score >= 20 → Avoid, blocking all buys)
+        decision['action'] = 'REDUCE'
         decision['confidence'] = 'Medium'
-        decision['recommended_pct'] = current_pct * 0.8
-        decision['primary_gating_reason'] = f"Elevated sell risk: {sell_score}/100"
-    
-    # Apply discovery exception override if not already set
-    elif discovery_active and discovery_reason and alpha_score_for_decision >= 45:
-        # Already handled above, skip to end
-        pass
-    
+        decision['recommended_pct'] = current_pct * 0.85
+        decision['primary_gating_reason'] = f"Moderate sell risk: {sell_score}/100 (reducing exposure)"
+
     elif alpha_score_for_decision >= strong_buy_threshold and current_pct < base_max:
-        if alpha_score_for_decision >= 85:
+        if alpha_score_for_decision >= 80:
             decision['action'] = 'Buy'
             decision['confidence'] = 'High'
         else:
             decision['action'] = 'Buy'
             decision['confidence'] = 'Medium'
-        
         decision['recommended_pct'] = min(base_max, current_pct + 2.0)
         decision['primary_gating_reason'] = f"Alpha model: {alpha_score_for_decision:.0f}/100"
-    
+
     elif alpha_score_for_decision >= buy_threshold and current_pct < base_max * 0.8:
         decision['action'] = 'Buy'
         decision['confidence'] = 'Medium'
         decision['recommended_pct'] = min(base_max * 0.8, current_pct + 1.0)
         decision['primary_gating_reason'] = f"Alpha model: {alpha_score_for_decision:.0f}/100"
-    
+
     else:
         decision['action'] = 'HOLD'
         decision['confidence'] = 'Low'
         decision['recommended_pct'] = current_pct
-        decision['primary_gating_reason'] = f"Insufficient alpha signal: {alpha_score_for_decision:.0f}/100 (threshold: {buy_threshold})"
+        decision['primary_gating_reason'] = f"Insufficient alpha: {alpha_score_for_decision:.0f}/100 (threshold: {buy_threshold})"
     
     decision['reasoning'].append(f"Alpha: {alpha_score:.0f}/100")
     decision['gates_passed'].append(f"✅ Liquidity: {liq_tier}")
