@@ -606,7 +606,7 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
                 rel_score = 60
             elif outperformance < -10:
                 rel_score = 30
-        except:
+        except Exception:
             pass
     
     models['M6_RelStrength'] = rel_score * 0.08
@@ -651,7 +651,7 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs))
             rsi = float(rsi.iloc[-1]) if not rsi.empty else 50
-        except:
+        except Exception:
             rsi = 50
     
     # V7.5: High Beta (> 1.5) is NOT penalized
@@ -1359,10 +1359,10 @@ def calculate_macro_regime(hist_slice: pd.DataFrame = None, date_ts: pd.Timestam
             elif gold_price < gold_ma50 * 0.95:
                 regime['factors'].append("Gold below MA50 (bearish)")
                 regime['throttle_factor'] *= 0.9
-    
-    except:
+
+    except Exception:
         pass
-    
+
     if not regime['factors']:
         regime['factors'] = ['Neutral market conditions']
     
@@ -1406,7 +1406,7 @@ def calculate_financing_overhang(news_items, ticker, runway_months, institutiona
                         days = (datetime.datetime.now() - news_date).days
                         if days_ago is None or days < days_ago:
                             days_ago = days
-                    except:
+                    except (ValueError, TypeError):
                         pass
             
             if status == 'CLOSED':
@@ -1489,7 +1489,7 @@ def calculate_financing_overhang(news_items, ticker, runway_months, institutiona
                         ts = ts / 1000
                     news_date = datetime.datetime.fromtimestamp(ts)
                     days_ago = (datetime.datetime.now() - news_date).days
-                except:
+                except (ValueError, TypeError):
                     pass
             
             if most_recent_days is None or (days_ago is not None and days_ago < most_recent_days):
@@ -1855,5 +1855,5 @@ def get_benchmark_data(metal):
         ticker = "SILJ" if metal == 'Silver' else "GDXJ"
         bench = yf.Ticker(ticker)
         return bench.history(period="6mo")
-    except:
+    except Exception:
         return None

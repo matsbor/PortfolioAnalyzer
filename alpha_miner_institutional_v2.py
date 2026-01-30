@@ -2,11 +2,12 @@
 # =============================================================================
 # DANGER ZONE: Only pure Python here. No st.*, no @st.cache_*, no st.session_state.
 # =============================================================================
-# V7.4: Force Tiingo Key Loading - Absolute Path with Override Strategy
+# V7.4: Force Tiingo Key Loading - Relative Path with Override Strategy
 import os
+from pathlib import Path as _Path
 from dotenv import load_dotenv
-env_path = "/Users/mats/PortfolioAnalyzer/hey.env"
-load_dotenv(dotenv_path=env_path, override=True)  # Force override to ignore stale env vars
+env_path = _Path(__file__).parent / "hey.env"
+load_dotenv(dotenv_path=str(env_path), override=True)  # Force override to ignore stale env vars
 # Force verification - will show in sidebar after Streamlit initializes
 _TIINGO_KEY_MISSING = not bool(os.getenv("TIINGO_API_KEY", "").strip())
 
@@ -321,7 +322,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-PORTFOLIO_SIZE = 200000  # $200k portfolio
+# PORTFOLIO_SIZE is imported from alpha_miner_core (line 51)
 
 # ============================================================================
 # CORE DATA STRUCTURES
@@ -332,18 +333,18 @@ CACHE_FILE = Path.home() / '.alpha_miner_cache.json'
 def load_cache():
     try:
         if CACHE_FILE.exists():
-            with open(CACHE_FILE) as f: 
+            with open(CACHE_FILE) as f:
                 return json.load(f)
-    except: 
-        pass
+    except (IOError, json.JSONDecodeError, OSError) as e:
+        print(f"Warning: Could not load cache: {e}")
     return {}
 
 def save_cache(data):
     try:
         with open(CACHE_FILE, 'w') as f:
             json.dump(data, f, indent=2)
-    except:
-        pass
+    except (IOError, OSError, TypeError) as e:
+        print(f"Warning: Could not save cache: {e}")
 
 if 'fund_cache' not in st.session_state:
     st.session_state.fund_cache = load_cache()
@@ -493,7 +494,7 @@ def get_sector_news_fallback():
             'publisher': item.get('publisher', 'Sector'),
             'link': item.get('link', '#')
         } for item in news]
-    except:
+    except Exception:
         return []
 
 # ============================================================================
@@ -580,10 +581,10 @@ def calculate_smc_signals(hist_data, current_price):
         
         else:
             result['summary'] = 'Ranging / Neutral structure'
-    
-    except:
+
+    except Exception:
         pass
-    
+
     return result
 
 # ============================================================================
@@ -613,164 +614,6 @@ def calculate_financing_overhang(news_items, ticker, runway_months):
     """Wrapper that passes INSTITUTIONAL_V3_AVAILABLE to core function"""
     from alpha_miner_core import calculate_financing_overhang as core_calculate_financing_overhang
     return core_calculate_financing_overhang(news_items, ticker, runway_months, INSTITUTIONAL_V3_AVAILABLE)
-
-# ============================================================================
-# I) DISCOVERY EXCEPTION
-# ============================================================================
-    """
-    Calculate financing overhang score (0-100).
-    Integrates with analyze_news_intelligence if v3 available, otherwise lightweight fallback.
-    
-    Returns: dict with 'score' (0-100) and 'reasons' (list of 2 short strings)
-    """
-    result = {
-        'score': 0.0,
-        'reasons': []
-    }
-    
-    if not news_items:
-        result['reasons'] = ['No news available']
-        return result
-    
-    # Try v3 integration first
-    if INSTITUTIONAL_V3_AVAILABLE:
-        try:
-            news_intel = analyze_news_intelligence(news_items, ticker)
-            status = news_intel.get('financing_status')
-            fin_type = news_intel.get('financing_type')
-            impact = news_intel.get('financing_impact', 0)
-            
-            # Find most recent financing event days_ago from news items
-            days_ago = None
-            for item in news_items:
-                ts = item.get('timestamp', 0)
-                if ts > 0:
-                    try:
-                        if ts > 1e12:
-                            ts = ts / 1000
-                        news_date = datetime.datetime.fromtimestamp(ts)
-                        days = (datetime.datetime.now() - news_date).days
-                        if days_ago is None or days < days_ago:
-                            days_ago = days
-                    except:
-                        pass
-            
-            if status == 'CLOSED':
-                if days_ago is not None and days_ago <= 7:
-                    # PP_CLOSED <=7d: overhang drops materially
-                    result['score'] = max(20, 40 + impact)
-                    result['reasons'] = [f'Financing closed {days_ago}d ago', 'Runway extended']
-                elif days_ago is not None and days_ago <= 30:
-                    result['score'] = max(20, 35 + impact)
-                    result['reasons'] = [f'Financing closed {days_ago}d ago', 'Recent close']
-                else:
-                    result['score'] = max(0, 30 + impact)
-                    result['reasons'] = ['Financing closed', 'Older event']
-            elif status == 'ANNOUNCED' or status == 'PRICED':
-                # ANNOUNCED not closed: 60-85
-                if fin_type == 'ATM':
-                    result['score'] = min(95, 85 + (impact if impact > 0 else 10))
-                    result['reasons'] = ['Active ATM', 'Ongoing dilution risk']
-                elif fin_type == 'SHELF':
-                    result['score'] = min(95, 80 + (impact if impact > 0 else 10))
-                    result['reasons'] = ['Shelf filed', 'Dilution imminent']
-                else:
-                    recency_factor = max(0, 30 - (days_ago or 90)) / 30.0
-                    result['score'] = 60 + (25 * recency_factor)
-                    result['reasons'] = ['Financing announced', 'Not yet closed']
-            elif status == 'NONE':
-                result['score'] = 0.0
-                result['reasons'] = ['No financing events']
-            else:
-                # Unknown status
-                result['score'] = 10.0
-                result['reasons'] = ['Unknown financing status']
-            
-            return result
-        except Exception as e:
-            # Fall through to lightweight fallback
-            pass
-    
-    # Lightweight fallback: keyword matching
-    financing_keywords = {
-        'shelf': ['shelf', 'prospectus', 'registration statement'],
-        'atm': ['atm', 'at-the-market', 'at the market'],
-        'closed': ['closes', 'closed', 'completes', 'completed', 'closing of'],
-        'announced': ['announces', 'proposes', 'intends to', 'plans to', 'seeks']
-    }
-    
-    most_recent_event = None
-    most_recent_days = None
-    
-    for item in news_items:
-        title_lower = (item.get('title', '') or '').lower()
-        ts = item.get('timestamp', 0)
-        
-        # Check if financing-related
-        is_financing = any(word in title_lower for word in 
-                          ['financing', 'placement', 'offering', 'capital raise', 'bought deal'])
-        if not is_financing:
-            continue
-        
-        # Determine stage and type
-        stage = None
-        fin_type = None
-        
-        if any(word in title_lower for word in financing_keywords['closed']):
-            stage = 'CLOSED'
-        elif any(word in title_lower for word in financing_keywords['announced']):
-            stage = 'ANNOUNCED'
-        
-        if any(word in title_lower for word in financing_keywords['shelf']):
-            fin_type = 'SHELF'
-        elif any(word in title_lower for word in financing_keywords['atm']):
-            fin_type = 'ATM'
-        
-        if stage:
-            # Calculate days ago
-            days_ago = None
-            if ts > 0:
-                try:
-                    if ts > 1e12:
-                        ts = ts / 1000
-                    news_date = datetime.datetime.fromtimestamp(ts)
-                    days_ago = (datetime.datetime.now() - news_date).days
-                except:
-                    pass
-            
-            if most_recent_days is None or (days_ago is not None and days_ago < most_recent_days):
-                most_recent_event = {'stage': stage, 'type': fin_type or 'PP', 'days_ago': days_ago}
-                most_recent_days = days_ago
-    
-    # Score based on most recent event
-    if most_recent_event:
-        stage = most_recent_event['stage']
-        fin_type = most_recent_event['type']
-        days_ago = most_recent_event.get('days_ago')
-        
-        if stage == 'CLOSED':
-            if days_ago is not None and days_ago <= 7:
-                result['score'] = 30.0
-                result['reasons'] = [f'Financing closed {days_ago}d ago', 'Runway extended']
-            else:
-                result['score'] = 20.0
-                result['reasons'] = ['Financing closed', 'Older event']
-        elif stage == 'ANNOUNCED':
-            if fin_type == 'ATM':
-                result['score'] = 85.0
-                result['reasons'] = ['Active ATM', 'Ongoing dilution']
-            elif fin_type == 'SHELF':
-                result['score'] = 80.0
-                result['reasons'] = ['Shelf filed', 'Dilution imminent']
-            else:
-                recency_factor = max(0, 30 - (days_ago or 90)) / 30.0 if days_ago is not None else 0.5
-                result['score'] = 60.0 + (25.0 * recency_factor)
-                result['reasons'] = ['Financing announced', 'Not yet closed']
-    else:
-        result['score'] = 0.0
-        result['reasons'] = ['No financing events detected']
-    
-    return result
 
 # ============================================================================
 # I) DISCOVERY EXCEPTION
@@ -1351,7 +1194,7 @@ def get_fundamentals_with_tracking(ticker):
                 elif ocf > 0:
                     result['burn'] = 0.1
                     result['burn_source'] = 'cashflow'
-        except:
+        except Exception:
             if info.get('netIncome') and info['netIncome'] < 0:
                 result['burn'] = abs(info['netIncome']) / 12_000_000
                 result['burn_source'] = 'netincome'
@@ -1417,10 +1260,10 @@ def get_fundamentals_with_tracking(ticker):
         else:
             result['news_promotion_score'] = 0
             result['news_keywords_found'] = []
-    
-    except:
+
+    except Exception:
         pass
-    
+
     return result
 
 
@@ -1576,7 +1419,7 @@ def get_news_for_ticker(ticker):
             })
         
         return tag_news(formatted_news)
-    except:
+    except Exception:
         return []
 
 # get_benchmark_data imported from alpha_miner_core
@@ -2213,13 +2056,13 @@ with st.sidebar:
         cwd = os.getcwd()
         st.text(f"📁 Current Directory: {cwd}")
         
-        # Check if hey.env exists at absolute path
-        env_path = "/Users/mats/PortfolioAnalyzer/hey.env"
-        env_exists = os.path.exists(env_path)
+        # Check if hey.env exists (relative to project root)
+        _diag_env_path = Path(__file__).parent / "hey.env"
+        env_exists = _diag_env_path.exists()
         if env_exists:
-            st.success(f"✅ hey.env found at: {env_path}")
+            st.success(f"✅ hey.env found at: {_diag_env_path}")
         else:
-            st.error(f"❌ hey.env NOT found at: {env_path}")
+            st.error(f"❌ hey.env NOT found at: {_diag_env_path}")
         
         # Check TIINGO_API_KEY and show first 4 chars
         tiingo_key_check = os.getenv("TIINGO_API_KEY", "").strip()
@@ -2927,7 +2770,7 @@ with st.sidebar:
             try:
                 with open(WATCHLIST_FILE, 'r') as f:
                     st.session_state.watchlist = json.load(f)
-            except:
+            except (IOError, OSError, json.JSONDecodeError):
                 st.session_state.watchlist = []
         else:
             st.session_state.watchlist = []
@@ -2946,7 +2789,7 @@ with st.sidebar:
                             json.dump(st.session_state.watchlist, f)
                         st.success(f"Added {symbol} to watchlist")
                         st.rerun()
-                    except:
+                    except (IOError, OSError, json.JSONDecodeError):
                         st.warning(f"Could not save watchlist, but {symbol} added to session")
     
     if st.session_state.watchlist:
@@ -2961,7 +2804,7 @@ with st.sidebar:
                     try:
                         with open(WATCHLIST_FILE, 'w') as f:
                             json.dump(st.session_state.watchlist, f)
-                    except:
+                    except (IOError, OSError, json.JSONDecodeError):
                         pass
                     st.rerun()
     else:
@@ -3370,7 +3213,7 @@ if st.session_state.get('watchlist'):
                                     total_portfolio_value = np.float64(total_mv + np.float64(st.session_state.cash))
                                 liq = calculate_liquidity_metrics(symbol, hist, price, mv, total_portfolio_value)
                                 result['Liquidity_Tier'] = liq.get('tier_code', 'L0')
-                        except:
+                        except Exception:
                             result['Liquidity_Tier'] = 'Unknown'
                     
                     # Tape gate status
@@ -4224,9 +4067,9 @@ if 'results' in st.session_state:
                 if candidate.get('evidence_pack_id') != current_id:
                     prev_pack = candidate
                     break
-            except:
+            except (IOError, OSError, json.JSONDecodeError):
                 continue
-    
+
     if prev_pack and prev_pack.get('results'):
         prev_df = pd.DataFrame(prev_pack['results'])
         prev_dict = prev_df.set_index('Symbol').to_dict('index')
@@ -4298,9 +4141,9 @@ if 'results' in st.session_state:
                         if candidate.get('evidence_pack_id') != current_id:
                             prev_pack = candidate
                             break
-                    except:
+                    except (IOError, OSError, json.JSONDecodeError):
                         continue
-            
+
             if prev_pack and prev_pack.get('results'):
                 prev_df = pd.DataFrame(prev_pack['results'])
                 prev_dict = prev_df.set_index('Symbol').to_dict('index')
@@ -4446,7 +4289,7 @@ if 'results' in st.session_state:
                     try:
                         cleaned = val.replace('$', '').replace(',', '').replace('+', '').replace('−', '-')
                         return abs(float(cleaned))
-                    except:
+                    except (ValueError, TypeError):
                         return 0.0
                 
                 rebalance_df_sorted = rebalance_df.copy()
@@ -6113,7 +5956,7 @@ if 'results' in st.session_state:
                                 format_dict[col] = '{:.2f}'
                             elif col == 'Risk_Score':
                                 format_dict[col] = '{:.0f}'
-                        except:
+                        except Exception:
                             pass
                 
                 st.dataframe(
@@ -6314,13 +6157,6 @@ if 'results' in st.session_state:
         ticker_news = news_cache.get(row['Symbol'], [])
         news_quality, news_badge = calculate_news_quality(ticker_news)
         badge_html += f'<span class="{news_badge}">News: {news_quality}</span> '
-        
-        # Financing Overhang details (if significant)
-        overhang_score = row.get('Financing_Overhang_Score', 0)
-        overhang_reasons = row.get('Financing_Overhang_Reasons', [])
-        if overhang_score >= 40 and overhang_reasons:
-            reasons_text = ' | '.join(overhang_reasons[:2])
-            badge_html += f'<span class="badge-tactical">FinOverhang: {reasons_text}</span> '
         
         # Financing Overhang details (if significant)
         overhang_score = row.get('Financing_Overhang_Score', 0)
