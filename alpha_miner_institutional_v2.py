@@ -193,9 +193,43 @@ except ImportError:
 
 # MODEL_ROLES, RISK_PROFILES, PORTFOLIO_SIZE imported from alpha_miner_core
 
+# V8.0: Technical Analysis, Portfolio Optimizer, Alert Engine, AISC Tracker, Insider Tracker
+try:
+    from technical_analysis import calculate_all_ta, calculate_rsi, calculate_macd, calculate_bollinger_bands
+    TA_MODULE_AVAILABLE = True
+except ImportError:
+    TA_MODULE_AVAILABLE = False
+
+try:
+    from portfolio_optimizer import (
+        calculate_correlation_matrix, optimize_mean_variance, optimize_risk_parity,
+        detect_concentration_risk, suggest_rebalance_trades, calculate_metal_beta
+    )
+    OPTIMIZER_AVAILABLE = True
+except ImportError:
+    OPTIMIZER_AVAILABLE = False
+
+try:
+    from alert_engine import check_all_alerts, get_alert_summary, save_alerts, load_alerts
+    ALERT_ENGINE_AVAILABLE = True
+except ImportError:
+    ALERT_ENGINE_AVAILABLE = False
+
+try:
+    from aisc_tracker import get_aisc_score, estimate_pnav, load_aisc_data
+    AISC_TRACKER_AVAILABLE = True
+except ImportError:
+    AISC_TRACKER_AVAILABLE = False
+
+try:
+    from insider_tracker import fetch_insider_transactions, calculate_insider_signal, update_portfolio_insider_flags
+    INSIDER_TRACKER_AVAILABLE = True
+except ImportError:
+    INSIDER_TRACKER_AVAILABLE = False
+
 # VERSION TRACKING
-VERSION = "7.5-JUNIOR-MIDTIER-PRIORITY-FIXED"
-VERSION_DATE = "2026-01-24"
+VERSION = "8.0-FULL-OVERHAUL"
+VERSION_DATE = "2026-01-30"
 VERSION_FEATURES = [
     "✅ V7.5 FIX: Market Cap extraction from info_dict in Global Search",
     "✅ V7.5 FIX: Actual filtering - stocks outside $20M-$600M are SKIPPED (not just logged)",
@@ -2048,7 +2082,26 @@ if 'cash' not in st.session_state:
 # Sidebar
 with st.sidebar:
     st.title("⚙️ Configuration")
-    
+
+    # V8.0: Alert Panel (top of sidebar)
+    if ALERT_ENGINE_AVAILABLE:
+        alerts = st.session_state.get('active_alerts', [])
+        if alerts:
+            summary = get_alert_summary(alerts)
+            alert_label = f"🔔 Alerts: {summary['critical']}C / {summary['warning']}W / {summary['info']}I"
+            with st.expander(alert_label, expanded=summary['critical'] > 0):
+                for a in alerts[:10]:
+                    sev = a.get('severity', 'info')
+                    msg = f"**{a.get('symbol', '?')}**: {a.get('message', '')}"
+                    if sev == 'critical':
+                        st.error(msg)
+                    elif sev == 'warning':
+                        st.warning(msg)
+                    else:
+                        st.info(msg)
+                if len(alerts) > 10:
+                    st.caption(f"... and {len(alerts) - 10} more alerts")
+
     # V7.4: "Black Box" Diagnostic Tracker at top of sidebar
     st.markdown("### 🔍 Black Box Diagnostic")
     with st.expander("🔬 System Diagnostics", expanded=False):
@@ -3549,7 +3602,53 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
             smc_signals_storage[row['Symbol']] = smc.get('signals', [])
         
         st.session_state.smc_signals_storage = smc_signals_storage
-        
+
+        # V8.0: Technical Analysis indicators
+        ta_storage = {}
+        if TA_MODULE_AVAILABLE:
+            progress.progress(67, text="📊 Technical analysis (RSI/MACD/Bollinger/OBV/ADX)...")
+            for idx, row in df.iterrows():
+                hist = hist_cache.get(row['Symbol'], pd.DataFrame())
+                if not hist.empty and len(hist) >= 20:
+                    ta_result = calculate_all_ta(hist)
+                    ta_storage[row['Symbol']] = ta_result
+                    df.at[idx, 'TA_Score'] = ta_result.get('ta_score', 50)
+                    df.at[idx, 'TA_Signal'] = ta_result.get('ta_signal', 'NEUTRAL')
+                    rsi_data = ta_result.get('rsi', {})
+                    df.at[idx, 'RSI'] = rsi_data.get('current', 50) if isinstance(rsi_data, dict) else 50
+                    macd_data = ta_result.get('macd', {})
+                    df.at[idx, 'MACD_Crossover'] = macd_data.get('crossover', 'none') if isinstance(macd_data, dict) else 'none'
+                    bb_data = ta_result.get('bollinger', {})
+                    df.at[idx, 'BB_Squeeze'] = bb_data.get('squeeze', False) if isinstance(bb_data, dict) else False
+                    adx_data = ta_result.get('adx', {})
+                    df.at[idx, 'Trend_Strength'] = adx_data.get('trend_strength', 'weak') if isinstance(adx_data, dict) else 'weak'
+                else:
+                    ta_storage[row['Symbol']] = {}
+                    df.at[idx, 'TA_Score'] = 50
+                    df.at[idx, 'TA_Signal'] = 'NEUTRAL'
+                    df.at[idx, 'RSI'] = 50
+                    df.at[idx, 'MACD_Crossover'] = 'none'
+                    df.at[idx, 'BB_Squeeze'] = False
+                    df.at[idx, 'Trend_Strength'] = 'weak'
+            st.session_state.ta_storage = ta_storage
+
+        # V8.0: AISC scoring (if spot prices available)
+        if AISC_TRACKER_AVAILABLE:
+            progress.progress(69, text="💰 AISC & margin analysis...")
+            spot = st.session_state.get('spot_prices', {})
+            spot_gold = spot.get('gold_live', spot.get('gold_eod', 2650))
+            spot_silver = spot.get('silver_live', spot.get('silver_eod', 31))
+            spot_uranium = spot.get('uranium_spot', 80)
+            for idx, row in df.iterrows():
+                metal = row.get('metal', 'Gold')
+                metal_price = spot_gold if metal == 'Gold' else spot_silver if metal == 'Silver' else spot_uranium
+                info_dict = info_storage.get(row['Symbol'], {})
+                aisc_result = get_aisc_score(row['Symbol'], metal, metal_price, info_dict)
+                df.at[idx, 'AISC_Estimate'] = aisc_result.get('aisc_estimate', 0)
+                df.at[idx, 'AISC_Margin_Pct'] = aisc_result.get('margin_pct', 0)
+                df.at[idx, 'AISC_Score'] = aisc_result.get('score', 50)
+                df.at[idx, 'AISC_Source'] = aisc_result.get('aisc_source', 'unknown')
+
         # Now calculate alpha WITH SMC scores available
         progress.progress(75, text="🎯 7-model alpha scoring...")
         
@@ -3858,7 +3957,21 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
         st.session_state.alpha_breakdown_storage = alpha_breakdown_storage
         st.session_state.sell_triggers_storage = sell_triggers_storage
         st.session_state.hist_cache = hist_cache  # V5.0: Store for recommendations tab
-        
+
+        # V8.0: Generate alerts after analysis
+        if ALERT_ENGINE_AVAILABLE:
+            try:
+                spot = st.session_state.get('spot_prices', {})
+                ta_cache_for_alerts = st.session_state.get('ta_storage', {})
+                alerts = check_all_alerts(df, hist_cache, news_cache, spot, ta_cache_for_alerts)
+                st.session_state.active_alerts = alerts
+                save_alerts(alerts)
+                alert_summary = get_alert_summary(alerts)
+                if alert_summary['critical'] > 0:
+                    st.warning(f"🔔 {alert_summary['critical']} critical alert(s) detected. Check sidebar.")
+            except Exception:
+                st.session_state.active_alerts = []
+
         st.success("✅ World-class analysis complete!")
         st.rerun()
     
@@ -4507,10 +4620,10 @@ if 'results' in st.session_state:
                     'status': 'ACTION_REQUIRED'
                 })
     
-    # V5.0: Decision-First Layout - Fixed tab structure (prevents IndexError)
-    # Always define all tabs to keep indices stable
-    tab_names = ["⚡ Actions Today", "✨ North American Discoveries", "👁️ Watchlist Radar"]
-    actions_tab, discovery_tab, watchlist_tab = st.tabs(tab_names)
+    # V8.0: Decision-First Layout with TA, Optimizer, and Alerts tabs
+    tab_names = ["⚡ Actions Today", "📊 Technical Analysis", "📈 Portfolio Optimizer",
+                 "✨ North American Discoveries", "👁️ Watchlist Radar"]
+    actions_tab, ta_tab, optimizer_tab, discovery_tab, watchlist_tab = st.tabs(tab_names)
     
     # Tab 1: Actions Today (show content only if RED status, otherwise show green checkmark)
     with actions_tab:
@@ -4693,7 +4806,218 @@ if 'results' in st.session_state:
                     st.markdown("### 📋 Rebalance Plan Summary")
                     st.dataframe(rebalance_table, use_container_width=True, hide_index=True)
     
-    # Tab 2: North American Discoveries (V7.0: Sovereign Global Scan – live tickers, no CSV)
+    # Tab 2: Technical Analysis (V8.0)
+    with ta_tab:
+        st.header("📊 Technical Analysis Dashboard")
+        st.caption("RSI, MACD, Bollinger Bands, OBV, ADX for each position")
+
+        if not TA_MODULE_AVAILABLE:
+            st.warning("Technical Analysis module not available. Install with: `pip install pandas numpy`")
+        else:
+            ta_storage = st.session_state.get('ta_storage', {})
+            if not ta_storage:
+                st.info("Run analysis first to populate technical indicators.")
+            else:
+                # Summary table
+                ta_summary_data = []
+                for symbol, ta_data in ta_storage.items():
+                    if not ta_data:
+                        continue
+                    rsi_data = ta_data.get('rsi', {})
+                    macd_data = ta_data.get('macd', {})
+                    bb_data = ta_data.get('bollinger', {})
+                    adx_data = ta_data.get('adx', {})
+                    obv_data = ta_data.get('obv', {})
+                    ta_summary_data.append({
+                        'Symbol': symbol,
+                        'TA Score': ta_data.get('ta_score', 50),
+                        'Signal': ta_data.get('ta_signal', 'NEUTRAL'),
+                        'RSI': round(rsi_data.get('current', 50), 1) if isinstance(rsi_data, dict) else 50,
+                        'MACD': macd_data.get('crossover', 'none') if isinstance(macd_data, dict) else 'none',
+                        'BB %B': round(bb_data.get('pct_b', 0.5), 2) if isinstance(bb_data, dict) else 0.5,
+                        'Squeeze': bb_data.get('squeeze', False) if isinstance(bb_data, dict) else False,
+                        'ADX': round(adx_data.get('adx', 0), 1) if isinstance(adx_data, dict) else 0,
+                        'Trend': adx_data.get('trend_strength', 'weak') if isinstance(adx_data, dict) else 'weak',
+                        'OBV Trend': obv_data.get('obv_trend', 'N/A') if isinstance(obv_data, dict) else 'N/A',
+                        'OBV Divergence': obv_data.get('obv_divergence', 'none') if isinstance(obv_data, dict) else 'none',
+                    })
+
+                if ta_summary_data:
+                    ta_df = pd.DataFrame(ta_summary_data)
+                    ta_df = ta_df.sort_values('TA Score', ascending=False)
+
+                    # Color-code signals
+                    st.dataframe(ta_df, use_container_width=True, hide_index=True)
+
+                    # Detailed per-symbol expandable sections
+                    st.markdown("---")
+                    st.subheader("Detailed Indicator Analysis")
+
+                    for symbol, ta_data in ta_storage.items():
+                        if not ta_data:
+                            continue
+                        with st.expander(f"{symbol} - {ta_data.get('ta_signal', 'NEUTRAL')} (Score: {ta_data.get('ta_score', 50)})"):
+                            col1, col2, col3, col4 = st.columns(4)
+
+                            rsi_data = ta_data.get('rsi', {})
+                            rsi_val = rsi_data.get('current', 50) if isinstance(rsi_data, dict) else 50
+                            with col1:
+                                st.metric("RSI (14)", f"{rsi_val:.1f}",
+                                          delta="Oversold" if rsi_val < 30 else "Overbought" if rsi_val > 70 else "Neutral")
+
+                            macd_data = ta_data.get('macd', {})
+                            with col2:
+                                macd_hist = macd_data.get('histogram', 0) if isinstance(macd_data, dict) else 0
+                                crossover = macd_data.get('crossover', 'none') if isinstance(macd_data, dict) else 'none'
+                                st.metric("MACD Histogram", f"{macd_hist:.4f}",
+                                          delta=crossover.capitalize() if crossover != 'none' else "No crossover")
+
+                            bb_data = ta_data.get('bollinger', {})
+                            with col3:
+                                pct_b = bb_data.get('pct_b', 0.5) if isinstance(bb_data, dict) else 0.5
+                                squeeze = bb_data.get('squeeze', False) if isinstance(bb_data, dict) else False
+                                st.metric("Bollinger %B", f"{pct_b:.2f}",
+                                          delta="SQUEEZE" if squeeze else "Normal")
+
+                            adx_data = ta_data.get('adx', {})
+                            with col4:
+                                adx_val = adx_data.get('adx', 0) if isinstance(adx_data, dict) else 0
+                                st.metric("ADX", f"{adx_val:.1f}",
+                                          delta=adx_data.get('trend_strength', 'weak').capitalize() if isinstance(adx_data, dict) else 'Weak')
+
+                            # TA Reasoning
+                            reasons = ta_data.get('ta_reasons', [])
+                            if reasons:
+                                st.caption("**Scoring Breakdown:**")
+                                for reason in reasons:
+                                    st.text(f"  {reason}")
+
+                            # Fibonacci levels
+                            fib_data = ta_data.get('fibonacci', {})
+                            if isinstance(fib_data, dict) and fib_data.get('levels'):
+                                st.caption("**Fibonacci Levels:**")
+                                fib_levels = fib_data.get('levels', {})
+                                support = fib_data.get('nearest_support')
+                                resistance = fib_data.get('nearest_resistance')
+                                fib_text = " | ".join([f"{k}: ${v:.2f}" for k, v in sorted(fib_levels.items())])
+                                st.text(fib_text)
+                                if support:
+                                    st.text(f"  Nearest Support: ${support:.2f}")
+                                if resistance:
+                                    st.text(f"  Nearest Resistance: ${resistance:.2f}")
+
+    # Tab 3: Portfolio Optimizer (V8.0)
+    with optimizer_tab:
+        st.header("📈 Portfolio Optimization")
+        st.caption("Mean-Variance, Risk Parity, Correlation Analysis, and Concentration Risk")
+
+        if not OPTIMIZER_AVAILABLE:
+            st.warning("Portfolio Optimizer module not available. Install scipy: `pip install scipy`")
+        else:
+            hist_cache_opt = st.session_state.get('hist_cache', {})
+
+            if not hist_cache_opt:
+                st.info("Run analysis first to populate portfolio data.")
+            else:
+                opt_col1, opt_col2 = st.columns(2)
+
+                with opt_col1:
+                    st.subheader("Correlation Matrix")
+                    try:
+                        corr_matrix = calculate_correlation_matrix(hist_cache_opt)
+                        if not corr_matrix.empty:
+                            if PLOTLY_AVAILABLE:
+                                import plotly.express as px
+                                fig = px.imshow(corr_matrix, text_auto='.2f', color_continuous_scale='RdBu_r',
+                                                zmin=-1, zmax=1, title='Position Correlation Matrix')
+                                fig.update_layout(height=500)
+                                st.plotly_chart(fig, use_container_width=True)
+                            else:
+                                st.dataframe(corr_matrix.round(2), use_container_width=True)
+                        else:
+                            st.info("Insufficient data for correlation matrix.")
+                    except Exception as e:
+                        st.warning(f"Could not compute correlations: {e}")
+
+                with opt_col2:
+                    st.subheader("Concentration Risk")
+                    try:
+                        if 'results' in st.session_state and st.session_state.results is not None:
+                            concentration = detect_concentration_risk(st.session_state.results)
+                            score = concentration.get('concentration_score', 0)
+
+                            if score < 30:
+                                st.success(f"Diversification Score: {100 - score:.0f}/100 (Well Diversified)")
+                            elif score < 60:
+                                st.warning(f"Diversification Score: {100 - score:.0f}/100 (Moderate Concentration)")
+                            else:
+                                st.error(f"Diversification Score: {100 - score:.0f}/100 (High Concentration)")
+
+                            warnings = concentration.get('warnings', [])
+                            for w in warnings:
+                                st.warning(w)
+
+                            # Breakdown charts
+                            by_metal = concentration.get('by_metal', {})
+                            if by_metal and PLOTLY_AVAILABLE:
+                                fig_metal = px.pie(names=list(by_metal.keys()), values=list(by_metal.values()),
+                                                   title='Allocation by Metal')
+                                st.plotly_chart(fig_metal, use_container_width=True)
+                        else:
+                            st.info("Run analysis first.")
+                    except Exception as e:
+                        st.warning(f"Could not compute concentration: {e}")
+
+                st.markdown("---")
+
+                # Optimization section
+                st.subheader("Portfolio Optimization")
+                opt_method = st.selectbox("Optimization Method", ["Mean-Variance (Max Sharpe)", "Risk Parity"])
+                max_weight = st.slider("Max Weight Per Position", 5, 25, 15, 1) / 100.0
+
+                if st.button("Run Optimization"):
+                    with st.spinner("Optimizing portfolio..."):
+                        try:
+                            if opt_method == "Mean-Variance (Max Sharpe)":
+                                opt_result = optimize_mean_variance(hist_cache_opt, max_weight=max_weight)
+                            else:
+                                opt_result = optimize_risk_parity(hist_cache_opt, max_weight=max_weight)
+
+                            if opt_result and opt_result.get('weights'):
+                                weights = opt_result['weights']
+                                weights_df = pd.DataFrame([
+                                    {'Symbol': k, 'Optimal Weight %': round(v * 100, 2)}
+                                    for k, v in sorted(weights.items(), key=lambda x: -x[1])
+                                    if v > 0.001
+                                ])
+                                st.dataframe(weights_df, use_container_width=True, hide_index=True)
+
+                                if 'sharpe_ratio' in opt_result:
+                                    st.metric("Optimal Sharpe Ratio", f"{opt_result['sharpe_ratio']:.3f}")
+                                if 'expected_return' in opt_result:
+                                    st.metric("Expected Annual Return", f"{opt_result['expected_return']*100:.1f}%")
+                                if 'expected_volatility' in opt_result:
+                                    st.metric("Expected Volatility", f"{opt_result['expected_volatility']*100:.1f}%")
+
+                                # Suggest rebalance trades
+                                if 'results' in st.session_state and st.session_state.results is not None:
+                                    results_df_opt = st.session_state.results
+                                    total_val = results_df_opt['Market_Value'].sum() + st.session_state.get('cash', 0)
+                                    current_w = {}
+                                    for _, r in results_df_opt.iterrows():
+                                        current_w[r['Symbol']] = r.get('Pct_Portfolio', 0) / 100.0
+
+                                    trades = suggest_rebalance_trades(current_w, weights, total_val)
+                                    if trades:
+                                        st.subheader("Suggested Rebalance Trades")
+                                        trades_df = pd.DataFrame(trades)
+                                        st.dataframe(trades_df, use_container_width=True, hide_index=True)
+                            else:
+                                st.warning("Optimization did not converge. Try adjusting parameters.")
+                        except Exception as e:
+                            st.error(f"Optimization failed: {e}")
+
+    # Tab 4: North American Discoveries (V7.0: Sovereign Global Scan – live tickers, no CSV)
     with discovery_tab:
         master_symbols = []
         master_count = 0
@@ -5851,6 +6175,27 @@ if 'results' in st.session_state:
                                 'Weight Impact': 'High' if aisc_score >= 80 else 'Med' if aisc_score >= 60 else 'Low'
                             })
                         
+                        # V8.0: Technical Analysis Score
+                        ta_score_val = row.get('TA_Score', None)
+                        if ta_score_val is not None and isinstance(ta_score_val, (int, float)):
+                            scorecard_data.append({
+                                'Metric': 'TA Score (RSI/MACD/BB/OBV/ADX)',
+                                'Value': f"{row.get('TA_Signal', 'NEUTRAL')} | RSI:{row.get('RSI', 50):.0f}",
+                                'Score (1-100)': f"{ta_score_val:.0f}",
+                                'Weight Impact': 'High' if ta_score_val >= 65 else 'Med' if ta_score_val >= 45 else 'Low'
+                            })
+
+                        # V8.0: AISC Margin (from aisc_tracker)
+                        aisc_margin = row.get('AISC_Margin_Pct', None)
+                        aisc_est = row.get('AISC_Estimate', None)
+                        if aisc_margin is not None and aisc_est is not None and isinstance(aisc_est, (int, float)) and aisc_est > 0:
+                            scorecard_data.append({
+                                'Metric': 'AISC Margin',
+                                'Value': f"${aisc_est:.0f} ({row.get('AISC_Source', '?')}) | Margin: {aisc_margin:.1f}%",
+                                'Score (1-100)': f"{row.get('AISC_Score', 50):.0f}",
+                                'Weight Impact': 'High' if aisc_margin > 25 else 'Med' if aisc_margin > 10 else 'Low'
+                            })
+
                         # Market Buzz
                         if row.get('Market_Buzz', False):
                             volume_spike = row.get('Volume_Spike_Pct', 0)
