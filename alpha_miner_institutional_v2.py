@@ -279,7 +279,22 @@ VERSION_FEATURES = [
     "✅ Fixed arbitration wiring",
     "✅ Model governance with veto logic",
     "✅ Confidence-based decision framing",
-    "✅ Watchlist & Quick Analysis"
+    "✅ Watchlist & Quick Analysis",
+    # V8.0 Features
+    "✅ V8.0: Technical Analysis Dashboard (RSI, MACD, Bollinger Bands, OBV, ADX, Fibonacci)",
+    "✅ V8.0: Portfolio Optimizer (Mean-Variance, Risk Parity, Kelly Criterion, Correlation Matrix)",
+    "✅ V8.0: Alert Engine (13 alert types: price/volume/TA/financing/insider/metal regime)",
+    "✅ V8.0: AISC Tracker (All-In Sustaining Cost with 16 known miners + financial estimation)",
+    "✅ V8.0: Insider Transaction Tracker (real yfinance data replacing hardcoded flags)",
+    "✅ V8.0: SEC EDGAR Scanner (mining company discovery from public filings)",
+    "✅ V8.0: Multi-Timeframe SMC Analysis (daily + weekly + monthly alignment scoring)",
+    "✅ V8.0: Backtest Drawdown Analysis (max DD, Calmar ratio, time underwater)",
+    "✅ V8.0: Transaction Cost Modeling (bid-ask spread at 50bps for junior miners)",
+    "✅ V8.0: Regime-Conditional Backtesting (bull/bear/choppy segmentation via gold 200-day MA)",
+    "✅ V8.0: Concentration Risk Detection (metal >40%, country >50%, correlated pairs >0.8)",
+    "✅ V8.0: P/NAV Estimation (DCF-based NAV from reserves and AISC)",
+    "✅ V8.0: 56 new unit tests across TA, optimizer, and alert modules",
+    "✅ V8.0: Critical bug fixes (orphaned code, hardcoded paths, duplicate rendering, bare excepts)",
 ]
 
 # V5.0: Global UI Configuration (prevents NameError)
