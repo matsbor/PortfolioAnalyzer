@@ -18,7 +18,7 @@
     "TEST2"
   ],
   "symbols_skipped": [],
-  "cache_dir": "/private/var/folders/7s/x1dfy_752wn3p5z_qpf693m00000gn/T/pytest-of-mats/pytest-110/test_default_backtest_does_not0/cache",
+  "cache_dir": "/tmp/pytest-of-root/pytest-4/test_default_backtest_does_not0/cache",
   "regime_heatmap": {
     "BULL": 0.0,
     "EXPANSION": 0.0,
@@ -29,7 +29,7 @@
   "opportunity_cost_pct": 0.0,
   "opportunity_cost_dollars": 0.0,
   "offline_used": true,
-  "run_timestamp_utc": "2026-01-24T22:16:00.058959+00:00",
+  "run_timestamp_utc": "2026-01-30T06:11:42.044256+00:00",
   "buy_and_hold_return_pct": 0.0,
   "buy_and_hold_final_value": 8600.0,
   "cash_return_pct": 0.0,
