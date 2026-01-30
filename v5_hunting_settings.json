@@ -1,0 +1,8 @@
+{
+    "max_stock_price": 20.00,
+    "max_market_cap_millions": 2000.0,
+    "min_cash_balance": 0,
+    "max_aisc_threshold": 2500.0,
+    "preferred_jurisdictions": ["Canada", "USA", "Mexico", "Australia"],
+    "high_beta_mode": true
+}

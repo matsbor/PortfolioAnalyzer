@@ -630,6 +630,72 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
     models['M8_StageFit'] = stage_score * 0.08
     breakdown.append(f"M8 StageFit: {stage_score}/100 × 8% = {models['M8_StageFit']:.1f}")
     
+    # M9: V7.5 Volatility/Momentum Risk Assessment (8%)
+    # Do NOT penalize High Beta (> 1.5)
+    # Treat High Volatility + Upward Momentum (RSI > 50) as BUY signal
+    # Only penalize volatility if trend is Down (Price < SMA200)
+    volatility = row.get('Volatility_60d', 0)
+    rsi = row.get('RSI', 50)  # Default to neutral if not available
+    current_price = row.get('Price', 0)
+    sma200 = row.get('MA200', 0)
+    beta = row.get('Beta', 1.0)  # Default to 1.0 if not available
+    
+    vol_momentum_score = 50  # Neutral baseline
+    
+    # Calculate RSI if not available (simple approximation)
+    if rsi == 50 and not hist_data.empty and len(hist_data) >= 14:
+        try:
+            delta = hist_data['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
+            rsi = float(rsi.iloc[-1]) if not rsi.empty else 50
+        except:
+            rsi = 50
+    
+    # V7.5: High Beta (> 1.5) is NOT penalized
+    # Instead, check volatility + momentum combination
+    if volatility > 0 and sma200 > 0:
+        # Check if trend is down (Price < SMA200)
+        trend_down = current_price < sma200
+        
+        if trend_down:
+            # Downward trend: Penalize high volatility
+            if volatility > 50:
+                vol_momentum_score = 20
+            elif volatility > 30:
+                vol_momentum_score = 35
+            else:
+                vol_momentum_score = 50
+            breakdown.append(f"M9 Vol/Momentum: Down trend (Price < SMA200), Vol {volatility:.1f}%: {vol_momentum_score}/100")
+        else:
+            # Upward or neutral trend
+            if rsi > 50 and volatility > 30:
+                # High Volatility + Upward Momentum = BUY signal
+                vol_momentum_score = 80
+                breakdown.append(f"M9 Vol/Momentum: High Vol {volatility:.1f}% + Upward Momentum (RSI {rsi:.0f} > 50) = BUY: {vol_momentum_score}/100")
+            elif rsi > 50:
+                # Upward momentum, normal volatility
+                vol_momentum_score = 70
+                breakdown.append(f"M9 Vol/Momentum: Upward Momentum (RSI {rsi:.0f} > 50): {vol_momentum_score}/100")
+            elif volatility > 50:
+                # High volatility but no upward momentum
+                vol_momentum_score = 40
+                breakdown.append(f"M9 Vol/Momentum: High Vol {volatility:.1f}% but no upward momentum: {vol_momentum_score}/100")
+            else:
+                vol_momentum_score = 50
+                breakdown.append(f"M9 Vol/Momentum: Normal conditions: {vol_momentum_score}/100")
+    else:
+        breakdown.append(f"M9 Vol/Momentum: Insufficient data (Vol: {volatility:.1f}%, SMA200: {sma200:.2f}): {vol_momentum_score}/100")
+    
+    # Note: Beta is tracked but NOT used for penalty (as per V7.5 requirements)
+    if beta > 1.5:
+        breakdown.append(f"ℹ️ High Beta {beta:.2f} > 1.5 (NOT penalized per V7.5)")
+    
+    models['M9_VolMomentum'] = vol_momentum_score * 0.08
+    breakdown.append(f"M9 Vol/Momentum: {vol_momentum_score}/100 × 8% = {models['M9_VolMomentum']:.1f}")
+    
     # Calculate total (before SMC adjustment)
     alpha_score = sum(models.values())
     
@@ -638,6 +704,284 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
         'models': models,
         'breakdown': breakdown
     }
+
+
+def calculate_fundamental_score(row: Dict, sector_data: Optional[List[Dict]] = None) -> Dict:
+    """
+    V7.5: Calculate Fundamental Alpha (FA) Score based on mining fundamentals.
+    
+    For stocks with Market Cap < $500M:
+    - IGNORE P/E ratio and Dividend Yield (juniors invest heavily in drilling)
+    - Score based on:
+      * Price to Book (P/B): Lower is better (undervalued assets)
+      * Cash vs Debt: High points if Cash > Debt (Runway)
+      * Insider Ownership: Boost if Insiders > 10%
+      * Current Ratio: Must be > 1.5 (Liquidity to survive)
+    
+    For stocks with Market Cap >= $500M:
+    - Use traditional metrics (AISC, Cash/Debt, MCAP/OZ)
+    
+    Args:
+        row: Row dict with symbol data
+        sector_data: Optional list of sector peers for MCAP/OZ percentile calculation
+    
+    Returns:
+        Dict with 'fa_score' (float), 'components' (dict), 'reasoning' (list), 'signal' (str: 'BUY'/'SELL'/'NEUTRAL')
+    """
+    result = {
+        'fa_score': 0.0,
+        'components': {},
+        'reasoning': [],
+        'signal': 'NEUTRAL'
+    }
+    
+    market_cap = row.get('Market_Cap', row.get('market_cap', 0))
+    info_dict = row.get('info_dict', {})
+    
+    # V7.5: For stocks < $500M, use Junior/Mid-Tier scoring (ignore P/E and Dividend Yield)
+    if market_cap > 0 and market_cap < 500:
+        # Component 1: Price to Book (P/B) - Score ∝ 1/P/B (Lower is better)
+        price_to_book = info_dict.get('priceToBook', info_dict.get('priceToBookTrailing12Months', None))
+        if price_to_book is not None and price_to_book > 0:
+            # V7.5: Score proportional to 1/P/B (inverse relationship)
+            # Lower P/B = higher score
+            pb_score = (1.0 / price_to_book) * 20  # Scale factor of 20 for reasonable range
+            pb_score = min(20.0, pb_score)  # Cap at +20 Alpha
+            
+            if price_to_book < 1.0:
+                result['fa_score'] += pb_score
+                result['components']['pb_bonus'] = pb_score
+                result['reasoning'].append(f"✅ P/B {price_to_book:.2f} < 1.0 (undervalued): +{pb_score:.1f} Alpha (1/P/B scoring)")
+            elif price_to_book < 2.0:
+                result['fa_score'] += pb_score
+                result['components']['pb_bonus'] = pb_score
+                result['reasoning'].append(f"✅ P/B {price_to_book:.2f} < 2.0 (good value): +{pb_score:.1f} Alpha (1/P/B scoring)")
+            elif price_to_book > 5.0:
+                result['fa_score'] -= 10.0
+                result['components']['pb_penalty'] = -10.0
+                result['reasoning'].append(f"⚠️ P/B {price_to_book:.2f} > 5.0 (overvalued): -10 Alpha")
+            else:
+                result['fa_score'] += pb_score * 0.5  # Half score for middle range
+                result['components']['pb_bonus'] = pb_score * 0.5
+                result['reasoning'].append(f"P/B {price_to_book:.2f} (neutral): +{pb_score*0.5:.1f} Alpha (1/P/B scoring)")
+        else:
+            result['components']['pb_bonus'] = 0.0
+            result['reasoning'].append("P/B data unavailable")
+        
+        # Component 2: Cash vs Debt (Runway Factor) - Boost score if Cash > Total Debt
+        cash = row.get('Cash', row.get('cash', info_dict.get('totalCash', 0)))
+        if cash == 0:
+            cash = info_dict.get('totalCash', 0) / 1_000_000 if info_dict.get('totalCash') else 0
+        debt = row.get('Debt', row.get('debt', info_dict.get('totalDebt', 0)))
+        if debt == 0:
+            debt = info_dict.get('totalDebt', 0) / 1_000_000 if info_dict.get('totalDebt') else 0
+        
+        if cash > 0 and debt >= 0:
+            if cash > debt:
+                # V7.5: Boost score (not just fixed amount) - proportional to cash/debt ratio
+                cash_debt_ratio = cash / max(debt, 1.0)  # Avoid division by zero
+                bonus = min(20.0, cash_debt_ratio * 5.0)  # Scale: 2x cash = +10, 4x cash = +20
+                result['fa_score'] += bonus
+                result['components']['cash_debt_bonus'] = bonus
+                result['reasoning'].append(f"✅ Cash ${cash:,.0f}M > Debt ${debt:,.0f}M (Runway Factor, {cash_debt_ratio:.1f}x): +{bonus:.1f} Alpha")
+                if result['signal'] != 'SELL':
+                    result['signal'] = 'BUY'
+            else:
+                result['components']['cash_debt_bonus'] = 0.0
+                result['reasoning'].append(f"Cash ${cash:,.0f}M ≤ Debt ${debt:,.0f}M (no bonus)")
+        else:
+            result['components']['cash_debt_bonus'] = 0.0
+            result['reasoning'].append("Cash/Debt data unavailable")
+        
+        # Component 3: Insider Ownership (> 10% = +20% bonus to score)
+        insider_ownership = info_dict.get('heldPercentInsiders', None)
+        if insider_ownership is not None:
+            if insider_ownership > 10:
+                # V7.5: +20% bonus to FA score (not just +12 Alpha)
+                base_score = result['fa_score']
+                bonus_pct = 0.20
+                bonus_amount = base_score * bonus_pct
+                result['fa_score'] += bonus_amount
+                result['components']['insider_bonus'] = bonus_amount
+                result['reasoning'].append(f"✅ Insider Ownership {insider_ownership:.1f}% > 10%: +{bonus_pct*100:.0f}% bonus ({bonus_amount:.1f} Alpha)")
+                if result['signal'] != 'SELL':
+                    result['signal'] = 'BUY'
+            elif insider_ownership > 5:
+                result['fa_score'] += 6.0
+                result['components']['insider_bonus'] = 6.0
+                result['reasoning'].append(f"Insider Ownership {insider_ownership:.1f}% > 5%: +6 Alpha")
+            else:
+                result['components']['insider_bonus'] = 0.0
+                result['reasoning'].append(f"Insider Ownership {insider_ownership:.1f}% (no bonus)")
+        else:
+            result['components']['insider_bonus'] = 0.0
+            result['reasoning'].append("Insider Ownership data unavailable")
+        
+        # Component 4: Current Ratio (Must be > 1.5 for liquidity)
+        current_ratio = info_dict.get('currentRatio', None)
+        if current_ratio is not None:
+            if current_ratio > 1.5:
+                result['fa_score'] += 10.0
+                result['components']['current_ratio_bonus'] = 10.0
+                result['reasoning'].append(f"✅ Current Ratio {current_ratio:.2f} > 1.5 (liquidity): +10 Alpha")
+            elif current_ratio < 1.0:
+                result['fa_score'] -= 15.0
+                result['components']['current_ratio_penalty'] = -15.0
+                result['reasoning'].append(f"🔴 Current Ratio {current_ratio:.2f} < 1.0 (illiquid): -15 Alpha")
+                result['signal'] = 'SELL'
+            else:
+                result['components']['current_ratio_bonus'] = 0.0
+                result['reasoning'].append(f"Current Ratio {current_ratio:.2f} (marginal)")
+        else:
+            result['components']['current_ratio_bonus'] = 0.0
+            result['reasoning'].append("Current Ratio data unavailable")
+        
+        # Note: P/E and Dividend Yield are IGNORED for juniors (as per requirements)
+        result['reasoning'].append("ℹ️ P/E and Dividend Yield ignored for juniors (< $500M)")
+    
+    else:
+        # V7.5: For stocks >= $500M, use traditional scoring
+        # Component 1: AISC Penalty (AISC > $1,400 = Sell/Avoid)
+        aisc = row.get('AISC', row.get('aisc', None))
+        if aisc is not None and aisc > 0:
+            if aisc > 1400:
+                result['fa_score'] -= 15.0
+                result['components']['aisc_penalty'] = -15.0
+                result['reasoning'].append(f"🔴 AISC ${aisc:.0f}/oz > $1,400: -15 Alpha (Sell/Avoid)")
+                result['signal'] = 'SELL'
+            elif aisc < 1100:
+                # Bonus for low AISC
+                result['fa_score'] += 10.0
+                result['components']['aisc_bonus'] = 10.0
+                result['reasoning'].append(f"✅ AISC ${aisc:.0f}/oz < $1,100: +10 Alpha")
+            else:
+                result['components']['aisc_penalty'] = 0.0
+                result['reasoning'].append(f"AISC ${aisc:.0f}/oz (neutral)")
+        else:
+            result['components']['aisc_penalty'] = 0.0
+            result['reasoning'].append("AISC data unavailable")
+        
+        # Component 2: Cash > Debt Reward (Cash > Debt = Buy)
+        cash = row.get('Cash', row.get('cash', 0))
+        debt = row.get('Debt', row.get('debt', 0))
+        if cash > 0 and debt >= 0:
+            if cash > debt:
+                result['fa_score'] += 10.0
+                result['components']['cash_debt_bonus'] = 10.0
+                result['reasoning'].append(f"✅ Cash ${cash:,.0f} > Debt ${debt:,.0f}: +10 Alpha (Buy)")
+                if result['signal'] != 'SELL':
+                    result['signal'] = 'BUY'
+            else:
+                result['components']['cash_debt_bonus'] = 0.0
+                result['reasoning'].append(f"Cash ${cash:,.0f} ≤ Debt ${debt:,.0f} (no bonus)")
+        else:
+            result['components']['cash_debt_bonus'] = 0.0
+            result['reasoning'].append("Cash/Debt data unavailable")
+    
+    # Component 3: Low MCAP/OZ Reward (Low MCAP/OZ = Buy/Green)
+    market_cap = row.get('Market_Cap', row.get('market_cap', 0))
+    ounces_reserve = row.get('Ounces_Reserve', row.get('ounces_reserve', row.get('Reserve_Oz', 0)))
+    
+    if market_cap > 0 and ounces_reserve > 0 and sector_data:
+        # Calculate this symbol's MCAP/OZ
+        mcap_per_oz = market_cap / ounces_reserve
+        
+        # Calculate MCAP/OZ for all sector peers
+        sector_mcap_per_oz = []
+        for peer in sector_data:
+            peer_mcap = peer.get('Market_Cap', peer.get('market_cap', 0))
+            peer_oz = peer.get('Ounces_Reserve', peer.get('ounces_reserve', peer.get('Reserve_Oz', 0)))
+            if peer_mcap > 0 and peer_oz > 0:
+                sector_mcap_per_oz.append(peer_mcap / peer_oz)
+        
+        if sector_mcap_per_oz:
+            # Calculate 20th percentile (bottom 20% = low MCAP/OZ = Buy/Green)
+            percentile_20 = np.percentile(sector_mcap_per_oz, 20)
+            
+            if mcap_per_oz <= percentile_20:
+                result['fa_score'] += 15.0
+                result['components']['mcap_oz_bonus'] = 15.0
+                result['reasoning'].append(f"✅ Low MCAP/OZ ${mcap_per_oz:.2f} (bottom 20%, ≤${percentile_20:.2f}): +15 Alpha (Buy/Green)")
+                if result['signal'] != 'SELL':
+                    result['signal'] = 'BUY'
+            else:
+                # Check if high MCAP/OZ (top 20% = overvalued)
+                percentile_80 = np.percentile(sector_mcap_per_oz, 80)
+                if mcap_per_oz >= percentile_80:
+                    result['fa_score'] -= 10.0
+                    result['components']['mcap_oz_penalty'] = -10.0
+                    result['reasoning'].append(f"⚠️ High MCAP/OZ ${mcap_per_oz:.2f} (top 20%, ≥${percentile_80:.2f}): -10 Alpha")
+                else:
+                    result['components']['mcap_oz_bonus'] = 0.0
+                    result['reasoning'].append(f"MCAP/OZ ${mcap_per_oz:.2f} (middle range)")
+        else:
+            result['components']['mcap_oz_bonus'] = 0.0
+            result['reasoning'].append("Insufficient sector data for MCAP/OZ comparison")
+    else:
+        result['components']['mcap_oz_bonus'] = 0.0
+        if not sector_data:
+            result['reasoning'].append("Sector data unavailable for MCAP/OZ comparison")
+        else:
+            result['reasoning'].append("MCAP/OZ data unavailable")
+    
+    return result
+
+
+def detect_market_buzz(hist_data: pd.DataFrame, threshold_multiplier: float = 3.0) -> Dict:
+    """
+    V5.0: Detect Market Buzz by identifying volume spikes.
+    
+    Logic: Volume spike = current volume > (threshold_multiplier × 20-day average)
+    Default threshold: +300% above 20-day average (threshold_multiplier = 3.0)
+    
+    Args:
+        hist_data: Historical price/volume data (must have 'Volume' column)
+        threshold_multiplier: Multiplier for volume spike detection (default 3.0 = 300% above average)
+    
+    Returns:
+        Dict with 'buzz_detected' (bool), 'volume_spike_pct' (float), 'current_volume' (float), 'avg_20d_volume' (float)
+    """
+    result = {
+        'buzz_detected': False,
+        'volume_spike_pct': 0.0,
+        'current_volume': 0.0,
+        'avg_20d_volume': 0.0,
+        'reason': ''
+    }
+    
+    if hist_data is None or hist_data.empty or 'Volume' not in hist_data.columns:
+        result['reason'] = 'Insufficient volume data'
+        return result
+    
+    if len(hist_data) < 20:
+        result['reason'] = 'Need at least 20 days of data'
+        return result
+    
+    # Get current volume (most recent day)
+    current_volume = float(hist_data['Volume'].iloc[-1])
+    result['current_volume'] = current_volume
+    
+    # Calculate 20-day average volume
+    avg_20d_volume = float(hist_data['Volume'].tail(20).mean())
+    result['avg_20d_volume'] = avg_20d_volume
+    
+    if avg_20d_volume <= 0:
+        result['reason'] = 'Invalid average volume'
+        return result
+    
+    # Calculate volume spike percentage
+    volume_spike_pct = ((current_volume - avg_20d_volume) / avg_20d_volume * 100) if avg_20d_volume > 0 else 0.0
+    result['volume_spike_pct'] = volume_spike_pct
+    
+    # Check if spike exceeds threshold (default: 300% = 3.0x multiplier)
+    threshold_pct = (threshold_multiplier - 1.0) * 100  # Convert multiplier to percentage
+    if volume_spike_pct >= threshold_pct:
+        result['buzz_detected'] = True
+        result['reason'] = f"Volume spike: {volume_spike_pct:.1f}% above 20-day average (threshold: {threshold_pct:.1f}%)"
+    else:
+        result['reason'] = f"Volume {volume_spike_pct:.1f}% above average (below {threshold_pct:.1f}% threshold)"
+    
+    return result
 
 
 def calculate_sell_risk(row, hist_data, ma50, ma200, news_items, macro_regime):
@@ -808,6 +1152,60 @@ def calculate_tape_gate(macro_regime, gold_analysis=None, silver_analysis=None):
     return gate
 
 
+def fetch_gold_silver_prices() -> Dict:
+    """
+    V4.0 Phase 3: Automatically fetch GC=F (Gold) and SI=F (Silver) prices via yfinance.
+    Called at the start of any run to enable automated macro-rotation.
+    
+    Returns:
+        Dict with 'gold_price', 'silver_price', 'gs_ratio', 'success', 'error'
+    """
+    result = {
+        'gold_price': 0.0,
+        'silver_price': 0.0,
+        'gs_ratio': 0.0,
+        'success': False,
+        'error': None
+    }
+    
+    if not YFINANCE_AVAILABLE:
+        result['error'] = 'yfinance not available'
+        return result
+    
+    try:
+        # Fetch Gold futures (GC=F)
+        gold_ticker = yf.Ticker("GC=F")
+        gold_hist = gold_ticker.history(period="1d")
+        
+        if not gold_hist.empty and 'Close' in gold_hist.columns:
+            result['gold_price'] = float(gold_hist['Close'].iloc[-1])
+        else:
+            result['error'] = 'Could not fetch GC=F price'
+            return result
+        
+        # Fetch Silver futures (SI=F)
+        silver_ticker = yf.Ticker("SI=F")
+        silver_hist = silver_ticker.history(period="1d")
+        
+        if not silver_hist.empty and 'Close' in silver_hist.columns:
+            result['silver_price'] = float(silver_hist['Close'].iloc[-1])
+        else:
+            result['error'] = 'Could not fetch SI=F price'
+            return result
+        
+        # Calculate GSR
+        if result['silver_price'] > 0:
+            result['gs_ratio'] = result['gold_price'] / result['silver_price']
+            result['success'] = True
+        else:
+            result['error'] = 'Invalid silver price'
+        
+    except Exception as e:
+        result['error'] = f"Error fetching prices: {str(e)}"
+    
+    return result
+
+
 def calculate_gs_ratio_bias(gold_price: float, silver_price: float) -> Dict:
     """
     Calculate Gold/Silver Ratio (GSR) bias for institutional rotation.
@@ -838,7 +1236,7 @@ def calculate_gs_ratio_bias(gold_price: float, silver_price: float) -> Dict:
     reason = f"GSR: {gs_ratio:.1f}"
     
     if gs_ratio > 80:
-        # Silver historically cheap - favor Silver explorers
+        # Silver historically cheap - favor Silver explorers (V4.0: threshold lowered from 85 to 80)
         silver_bonus = 10
         reason += " (Silver cheap: +10 Torque Bonus to Silver explorers)"
     elif gs_ratio < 60:
@@ -1130,10 +1528,13 @@ def calculate_financing_overhang(news_items, ticker, runway_months, institutiona
 
 
 def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk, 
-                             alpha_score, macro_regime, discovery, tape_gate=None, strict_mode=False, risk_mode='BALANCED'):
+                             alpha_score, macro_regime, discovery, tape_gate=None, strict_mode=False, risk_mode='BALANCED', gsr_bias=None):
     """
     Final decision arbitration with model hierarchy and veto logic.
     Model roles: Alpha (recommends), Risk/Liquidity/Overhang (may veto).
+    
+    Args:
+        gsr_bias: Optional dict from calculate_gs_ratio_bias() for V4.0 Phase 3 automated macro-rotation
     """
     decision = {
         'action': 'HOLD',
@@ -1148,6 +1549,16 @@ def arbitrate_final_decision(row, liq_metrics, data_conf, dilution, sell_risk,
         'veto_applied': False,
         'veto_model': None
     }
+    
+    # V4.0 Phase 3: Apply GSR Torque Bonus to Silver symbols if GSR > 80
+    metal = row.get('metal', row.get('Metal', 'Gold'))
+    metal_type = row.get('Metal_Type', metal)
+    if gsr_bias and metal_type and 'Silver' in str(metal_type):
+        silver_bonus = gsr_bias.get('silver_bonus', 0)
+        if silver_bonus > 0:
+            alpha_score += silver_bonus  # Apply +10 Torque Bonus
+            decision['reasoning'].append(f"💰 GSR Torque Bonus: +{silver_bonus} Alpha (GSR {gsr_bias.get('gs_ratio', 0):.1f} > 80)")
+            decision['gates_passed'].append(f"GSR Silver Bonus: +{silver_bonus}")
     
     # Gate checks
     liq_tier = liq_metrics.get('tier_code', 'L0')

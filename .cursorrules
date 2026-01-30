@@ -1,0 +1,7 @@
+# Alpha Miner Pro V4.0 - Development Guidelines
+- Current Version: V4.0 (Institutional Rebalancing & Bulk Scanning)
+- Critical Rule: NEVER execute a trade if Market Impact > 1.5%.
+- SMC Logic: Reference 'institutional_enhancements.py' for Fair Value Gaps and Order Blocks.
+- Rebalancing: Trim positions back to 10% if they exceed 20% of the portfolio. 
+- Principal Harvesting: Sell initial principal if a stock hits +100% (2-bagger).
+- Metal Rotation: Automatically apply +10 Alpha if GSR > 80 (pulled via yfinance).

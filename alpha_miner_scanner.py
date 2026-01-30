@@ -265,3 +265,59 @@ def load_symbols_from_csv(csv_path: Path) -> List[str]:
             raise ValueError(f"CSV file must have a 'Symbol' column. Found columns: {df.columns.tolist()}")
     except Exception as e:
         raise ValueError(f"Error loading symbols from CSV: {e}")
+
+
+def load_master_discovery_list(csv_path: Optional[Path] = None, max_symbols: int = 200) -> List[str]:
+    """
+    V4.0: Load symbols from master_discovery_list.csv for bulk processing.
+    
+    Supports up to 200 symbols for batch scanning. The CSV can have:
+    - A 'Symbol' column (required)
+    - Optional metadata columns (Stage, Metal, Jurisdiction, etc.) for filtering
+    
+    Args:
+        csv_path: Path to master_discovery_list.csv (default: ./master_discovery_list.csv)
+        max_symbols: Maximum number of symbols to load (default: 200)
+    
+    Returns:
+        List of symbol strings (uppercase, deduplicated)
+    
+    Raises:
+        FileNotFoundError: If CSV file doesn't exist
+        ValueError: If CSV format is invalid
+    """
+    if csv_path is None:
+        csv_path = Path('./master_discovery_list.csv')
+    
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Master discovery list not found: {csv_path}")
+    
+    try:
+        df = pd.read_csv(csv_path)
+        
+        # Handle various column name formats
+        symbol_column = None
+        for col in df.columns:
+            if col.strip().lower() in ['symbol', 'ticker', 'stock', 'sym']:
+                symbol_column = col
+                break
+        
+        if symbol_column is None:
+            raise ValueError(f"CSV must have a 'Symbol' column. Found columns: {df.columns.tolist()}")
+        
+        # Extract symbols, deduplicate, and limit to max_symbols
+        symbols = df[symbol_column].dropna().astype(str).str.strip().str.upper().unique().tolist()
+        
+        # Limit to max_symbols
+        if len(symbols) > max_symbols:
+            symbols = symbols[:max_symbols]
+            print(f"⚠️  Warning: Loaded {max_symbols} symbols (limit). Total available: {len(df)}")
+        else:
+            print(f"✓ Loaded {len(symbols)} symbols from {csv_path.name}")
+        
+        return symbols
+    
+    except pd.errors.EmptyDataError:
+        raise ValueError(f"CSV file is empty: {csv_path}")
+    except Exception as e:
+        raise ValueError(f"Error loading master discovery list: {e}")

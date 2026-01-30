@@ -1,30 +1,18 @@
 {
-  "git_commit_hash": "5c7cb64e477219e3be1fd4edfa415d9460740c59",
+  "git_commit_hash": "47f00291d230f70bb169703cb44410e1545947c1",
   "python_version": "3.13.0 (v3.13.0:60403a5409f, Oct  7 2024, 00:37:40) [Clang 15.0.0 (clang-1500.3.9.4)]",
   "platform": "macOS-15.7.3-arm64-arm-64bit-Mach-O",
-  "run_timestamp_utc": "2026-01-22T04:34:18.649864+00:00",
-  "cache_dir": ".backtest_cache",
+  "run_timestamp_utc": "2026-01-24T22:16:00.599792+00:00",
+  "cache_dir": "/private/var/folders/7s/x1dfy_752wn3p5z_qpf693m00000gn/T/pytest-of-mats/pytest-110/test_default_backtest_does_not0/cache",
   "symbols_loaded": [
-    "AG",
-    "AGXPF",
-    "BORMF",
-    "EXNRF",
-    "GSVRF",
-    "ITRG",
-    "JAGGF",
-    "JZRIF",
-    "LOMLF",
-    "LUCMF",
-    "SMAGF",
-    "SMDRF",
-    "TSKFF",
-    "WRLGF"
+    "TEST1",
+    "TEST2"
   ],
   "symbols_skipped": [],
   "report_hashes": {
-    "backtest_summary.json": "1365861c9d2651fcee2a5df864664ce36f8bf58875fcb92d6464865525b4d6e5",
-    "backtest_trades.csv": "e4f70c99f0209900e8bdf6a1b4cd5fa77829e57877ef7c6a3460affca978a102",
-    "backtest_daily.csv": "83a34892d20c9901527349184f8557ad125805fe9139127273fdaaf4ca25bdc7"
+    "backtest_summary.json": "eabab1bdd9f84ab4fc700f1e455891964e020003bea024640db622e150e54198",
+    "backtest_trades.csv": "af93b60389d0aeba4c715b9a146ea99ecde369501f5c6f2f9fc313f75e5fc753",
+    "backtest_daily.csv": "492b5ef3ab27413b90cbe59a54ca76c8c9bdbd9834e0261a1f394cc2e91a0bf5"
   },
   "sell_policy": "veto_only",
   "offline_mode": true

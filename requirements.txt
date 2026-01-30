@@ -4,6 +4,8 @@ numpy
 yfinance
 pytest
 python-dateutil
+python-dotenv
 requests
+tiingo
 beautifulsoup4
 curl_cffi
