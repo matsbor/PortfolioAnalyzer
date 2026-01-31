@@ -38,6 +38,11 @@ ALERT_TYPES: Dict[str, Dict[str, str]] = {
     "METAL_REGIME_CHANGE": {"severity": "warning", "desc": "Metal crossed key moving average"},
     "BOLLINGER_SQUEEZE": {"severity": "info", "desc": "Bollinger Band squeeze detected"},
     "PRINCIPAL_HARVEST": {"severity": "info", "desc": "Position reached 2x cost basis"},
+    "RUNWAY_CRISIS": {"severity": "critical", "desc": "Cash runway below 6 months"},
+    "DEATH_CROSS": {"severity": "warning", "desc": "50-day MA crossed below 200-day MA"},
+    "GAP_DOWN": {"severity": "warning", "desc": "Price gapped down more than 10%"},
+    "DILUTION_HIGH": {"severity": "warning", "desc": "Dilution risk score above 70"},
+    "INSIDER_SELLING": {"severity": "warning", "desc": "Insider sale detected"},
 }
 
 _SEVERITY_ORDER: Dict[str, int] = {"critical": 0, "warning": 1, "info": 2}
@@ -596,6 +601,125 @@ def check_metal_regime_alerts(
 # ---------------------------------------------------------------------------
 
 
+def check_survival_alerts(
+    symbol: str,
+    row: Dict[str, Any],
+    hist: Optional[pd.DataFrame] = None,
+) -> List[Dict[str, Any]]:
+    """Check for survival-critical conditions: runway crisis, dilution, death cross, gap down.
+
+    Parameters
+    ----------
+    symbol : str
+        Ticker symbol.
+    row : dict
+        Portfolio row data (may contain Runway_Months, Dilution_Risk_Score, etc.).
+    hist : pd.DataFrame, optional
+        OHLCV history for death cross and gap-down detection.
+
+    Returns
+    -------
+    list[dict]
+        Alerts found.
+    """
+    alerts: List[Dict[str, Any]] = []
+
+    # Runway crisis: cash runway < 6 months
+    runway = row.get('Runway_Months')
+    if runway is not None:
+        try:
+            runway_val = float(runway)
+            if runway_val < 6:
+                alerts.append(_make_alert(
+                    symbol, "RUNWAY_CRISIS",
+                    f"Cash runway {runway_val:.1f} months (< 6 months) — financing likely imminent",
+                    value=runway_val,
+                ))
+        except (TypeError, ValueError):
+            pass
+
+    # Dilution risk critical
+    dilution = row.get('Dilution_Risk_Score')
+    if dilution is not None:
+        try:
+            dil_val = float(dilution)
+            if dil_val >= 70:
+                alerts.append(_make_alert(
+                    symbol, "DILUTION_HIGH",
+                    f"Dilution risk {dil_val:.0f}/100 — elevated share dilution risk",
+                    value=dil_val,
+                ))
+        except (TypeError, ValueError):
+            pass
+
+    if hist is not None and not hist.empty and 'Close' in hist.columns:
+        close = hist['Close'].dropna()
+
+        # Death cross: MA50 < MA200
+        if len(close) >= 200:
+            ma50 = close.rolling(50).mean()
+            ma200 = close.rolling(200).mean()
+            if (len(ma50) >= 2 and len(ma200) >= 2
+                    and not (np.isnan(ma50.iloc[-1]) or np.isnan(ma200.iloc[-1])
+                             or np.isnan(ma50.iloc[-2]) or np.isnan(ma200.iloc[-2]))):
+                prev_above = ma50.iloc[-2] >= ma200.iloc[-2]
+                curr_below = ma50.iloc[-1] < ma200.iloc[-1]
+                if prev_above and curr_below:
+                    alerts.append(_make_alert(
+                        symbol, "DEATH_CROSS",
+                        f"50-day MA ({ma50.iloc[-1]:.2f}) crossed below 200-day MA ({ma200.iloc[-1]:.2f})",
+                        value=float(ma50.iloc[-1]),
+                    ))
+
+        # Gap down: > 10% single-day drop
+        if len(close) >= 2:
+            prev_close = float(close.iloc[-2])
+            curr_close = float(close.iloc[-1])
+            if prev_close > 0:
+                pct_change = (curr_close - prev_close) / prev_close * 100
+                if pct_change <= -10.0:
+                    alerts.append(_make_alert(
+                        symbol, "GAP_DOWN",
+                        f"Price dropped {pct_change:.1f}% in one day (${prev_close:.2f} -> ${curr_close:.2f})",
+                        value=pct_change,
+                    ))
+
+    return alerts
+
+
+def check_insider_selling_alerts(
+    symbol: str,
+    news_items: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Check news for insider selling keywords.
+
+    Parameters
+    ----------
+    symbol : str
+        Ticker symbol.
+    news_items : list[dict]
+        News items to scan.
+
+    Returns
+    -------
+    list[dict]
+        Alerts found.
+    """
+    alerts: List[Dict[str, Any]] = []
+    _SELL_KEYWORDS = ["insider sell", "insider sale", "disposition", "sold shares",
+                      "executive sell", "director sell", "officer sell"]
+    for item in (news_items or []):
+        title = (item.get("title") or "").lower()
+        for kw in _SELL_KEYWORDS:
+            if kw in title:
+                alerts.append(_make_alert(
+                    symbol, "INSIDER_SELLING",
+                    f"Insider selling detected: {item.get('title', 'Unknown')}",
+                ))
+                return alerts  # One alert per symbol
+    return alerts
+
+
 def check_all_alerts(
     portfolio_df: pd.DataFrame,
     hist_cache: Dict[str, pd.DataFrame],
@@ -651,6 +775,15 @@ def check_all_alerts(
         news_items = news_cache.get(sym) if news_cache else None
         if news_items:
             all_alerts.extend(check_financing_alerts(sym, news_items))
+            all_alerts.extend(check_insider_selling_alerts(sym, news_items))
+
+        # Survival alerts (runway, dilution, death cross, gap down)
+        row_data = {}
+        if portfolio_df is not None and not portfolio_df.empty and "Symbol" in portfolio_df.columns:
+            sym_rows = portfolio_df[portfolio_df["Symbol"] == sym]
+            if not sym_rows.empty:
+                row_data = sym_rows.iloc[0].to_dict()
+        all_alerts.extend(check_survival_alerts(sym, row_data, hist))
 
     # Portfolio-level alerts
     if portfolio_df is not None and not portfolio_df.empty:

@@ -1171,14 +1171,16 @@ def simulate_day(
     # Junior miners are inherently volatile (20-30% swings are normal).
     # Stops that are too tight liquidate good positions during normal volatility.
     if trailing_stop_pct is None:
+        # CONSERVATIVE = tighter stop to protect capital
+        # AGGRESSIVE = wider stop to ride through volatility for bigger gains
         if risk_mode == 'AGGRESSIVE':
-            trailing_stop_pct = 25.0  # 25% for AGGRESSIVE (wider for juniors)
+            trailing_stop_pct = 35.0
         elif risk_mode == 'BALANCED':
-            trailing_stop_pct = 30.0  # 30% for BALANCED (junior-miner appropriate)
+            trailing_stop_pct = 30.0
         elif risk_mode == 'CONSERVATIVE':
-            trailing_stop_pct = 35.0  # 35% for CONSERVATIVE (widest, let positions breathe)
+            trailing_stop_pct = 25.0
         else:
-            trailing_stop_pct = 30.0  # Default
+            trailing_stop_pct = 30.0
     
     # Apply risk_mode settings to macro_regime
     if risk_mode == 'AGGRESSIVE':

@@ -503,7 +503,136 @@ def calculate_fibonacci_levels(hist: pd.DataFrame,
 
 
 # ---------------------------------------------------------------------------
-# 7. Composite Analysis
+# 7. Stochastic Oscillator (%K / %D)
+# ---------------------------------------------------------------------------
+
+def calculate_stochastic(
+    hist: pd.DataFrame,
+    k_period: int = 14,
+    d_period: int = 3,
+) -> dict:
+    """Stochastic oscillator (%K and %D).
+
+    Returns dict with 'k', 'd', 'signal' ('OVERSOLD'/'OVERBOUGHT'/'NEUTRAL'),
+    and 'crossover' (bool: %K crossed above %D).
+    """
+    if hist.empty or len(hist) < k_period + d_period:
+        return {'k': 50.0, 'd': 50.0, 'signal': 'NEUTRAL', 'crossover': False}
+
+    high = hist['High']
+    low = hist['Low']
+    close = hist['Close']
+
+    lowest_low = low.rolling(k_period).min()
+    highest_high = high.rolling(k_period).max()
+
+    denom = highest_high - lowest_low
+    denom = denom.replace(0.0, np.nan)
+    k_line = ((close - lowest_low) / denom) * 100
+    d_line = k_line.rolling(d_period).mean()
+
+    k_val = float(k_line.iloc[-1]) if not np.isnan(k_line.iloc[-1]) else 50.0
+    d_val = float(d_line.iloc[-1]) if not np.isnan(d_line.iloc[-1]) else 50.0
+
+    signal = 'NEUTRAL'
+    if k_val < 20 and d_val < 20:
+        signal = 'OVERSOLD'
+    elif k_val > 80 and d_val > 80:
+        signal = 'OVERBOUGHT'
+
+    crossover = False
+    if len(k_line) >= 2 and len(d_line) >= 2:
+        prev_k = k_line.iloc[-2]
+        prev_d = d_line.iloc[-2]
+        if not (np.isnan(prev_k) or np.isnan(prev_d)):
+            crossover = bool(prev_k <= prev_d and k_val > d_val)
+
+    return {'k': k_val, 'd': d_val, 'signal': signal, 'crossover': crossover}
+
+
+# ---------------------------------------------------------------------------
+# 8. Commodity Channel Index (CCI)
+# ---------------------------------------------------------------------------
+
+def calculate_cci(
+    hist: pd.DataFrame,
+    period: int = 20,
+) -> dict:
+    """Commodity Channel Index — measures deviation from statistical mean.
+
+    Returns dict with 'cci' value, 'signal' ('OVERSOLD'/'OVERBOUGHT'/'NEUTRAL'),
+    and 'trend_strength' (abs CCI / 100, capped at 2.0).
+    """
+    if hist.empty or len(hist) < period:
+        return {'cci': 0.0, 'signal': 'NEUTRAL', 'trend_strength': 0.0}
+
+    tp = (hist['High'] + hist['Low'] + hist['Close']) / 3.0
+    sma_tp = tp.rolling(period).mean()
+    mad = tp.rolling(period).apply(lambda x: np.abs(x - x.mean()).mean(), raw=True)
+    mad = mad.replace(0.0, np.nan)
+    cci = (tp - sma_tp) / (0.015 * mad)
+
+    cci_val = float(cci.iloc[-1]) if not np.isnan(cci.iloc[-1]) else 0.0
+
+    signal = 'NEUTRAL'
+    if cci_val < -100:
+        signal = 'OVERSOLD'
+    elif cci_val > 100:
+        signal = 'OVERBOUGHT'
+
+    trend_strength = min(2.0, abs(cci_val) / 100.0)
+
+    return {'cci': cci_val, 'signal': signal, 'trend_strength': trend_strength}
+
+
+# ---------------------------------------------------------------------------
+# 9. Average True Range (ATR)
+# ---------------------------------------------------------------------------
+
+def calculate_atr(
+    hist: pd.DataFrame,
+    period: int = 14,
+) -> dict:
+    """Average True Range — volatility measure.
+
+    Returns dict with 'atr' (dollar value), 'atr_pct' (ATR as % of close),
+    and 'volatility_regime' ('LOW'/'NORMAL'/'HIGH'/'EXTREME').
+    """
+    if hist.empty or len(hist) < period + 1:
+        return {'atr': 0.0, 'atr_pct': 0.0, 'volatility_regime': 'NORMAL'}
+
+    high = hist['High']
+    low = hist['Low']
+    close = hist['Close']
+
+    prev_close = close.shift(1)
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    alpha = 1.0 / period
+    atr = tr.ewm(alpha=alpha, adjust=False).mean()
+
+    atr_val = float(atr.iloc[-1]) if not np.isnan(atr.iloc[-1]) else 0.0
+    last_close = float(close.iloc[-1]) if not np.isnan(close.iloc[-1]) else 1.0
+    atr_pct = (atr_val / last_close * 100) if last_close > 0 else 0.0
+
+    # Classify volatility regime for mining stocks
+    if atr_pct < 2.0:
+        regime = 'LOW'
+    elif atr_pct < 4.0:
+        regime = 'NORMAL'
+    elif atr_pct < 7.0:
+        regime = 'HIGH'
+    else:
+        regime = 'EXTREME'
+
+    return {'atr': atr_val, 'atr_pct': atr_pct, 'volatility_regime': regime}
+
+
+# ---------------------------------------------------------------------------
+# 10. Composite Analysis
 # ---------------------------------------------------------------------------
 
 def calculate_all_ta(hist: pd.DataFrame) -> dict:
@@ -557,6 +686,9 @@ def calculate_all_ta(hist: pd.DataFrame) -> dict:
     obv_result = calculate_obv(hist)
     adx_result = calculate_adx(hist)
     fib_result = calculate_fibonacci_levels(hist)
+    stoch_result = calculate_stochastic(hist)
+    cci_result = calculate_cci(hist)
+    atr_result = calculate_atr(hist)
 
     # Package RSI into a dict with both scalar and series
     rsi_current = np.nan
@@ -649,6 +781,33 @@ def calculate_all_ta(hist: pd.DataFrame) -> dict:
         adjustment += 3
         reasons.append("OBV trend rising: +3")
 
+    # Stochastic contribution
+    if stoch_result['signal'] == 'OVERSOLD':
+        adjustment += 7
+        reasons.append(f"Stochastic oversold (%K={stoch_result['k']:.0f}): +7")
+    elif stoch_result['signal'] == 'OVERBOUGHT':
+        adjustment -= 5
+        reasons.append(f"Stochastic overbought (%K={stoch_result['k']:.0f}): -5")
+    if stoch_result['crossover']:
+        adjustment += 4
+        reasons.append("Stochastic %K crossed above %D: +4")
+
+    # CCI contribution (important for commodity/mining stocks)
+    if cci_result['signal'] == 'OVERSOLD':
+        adjustment += 6
+        reasons.append(f"CCI oversold ({cci_result['cci']:.0f}): +6")
+    elif cci_result['signal'] == 'OVERBOUGHT':
+        adjustment -= 4
+        reasons.append(f"CCI overbought ({cci_result['cci']:.0f}): -4")
+
+    # ATR volatility regime — dampen signals in extreme volatility
+    if atr_result['volatility_regime'] == 'EXTREME':
+        adjustment *= 0.7
+        reasons.append(
+            f"Extreme volatility (ATR {atr_result['atr_pct']:.1f}%): "
+            f"signals dampened by 0.7"
+        )
+
     # ADX multiplier (applied to the aggregate adjustment)
     adx_val = adx_result['adx']
     if not np.isnan(adx_val):
@@ -688,6 +847,9 @@ def calculate_all_ta(hist: pd.DataFrame) -> dict:
         'obv': obv_result,
         'adx': adx_result,
         'fibonacci': fib_result,
+        'stochastic': stoch_result,
+        'cci': cci_result,
+        'atr': atr_result,
         'ta_signal': ta_signal,
         'ta_score': ta_score,
         'ta_reasons': reasons,

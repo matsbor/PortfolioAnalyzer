@@ -340,8 +340,14 @@ def optimize_mean_variance(
     )
 
     if not result.success:
-        # Fall back to equal weight
+        # Fall back to equal weight — log the failure for transparency
         opt_w = w0
+        import warnings
+        warnings.warn(
+            f"Mean-variance optimization failed ({result.message}); "
+            f"falling back to equal-weight allocation.",
+            stacklevel=2,
+        )
     else:
         opt_w = result.x
 
@@ -500,13 +506,17 @@ def kelly_position_size(
     avg_win: float,
     avg_loss: float,
     max_fraction: float = 0.25,
+    fractional: float = 0.5,
+    num_positions: int = 1,
 ) -> float:
-    """Kelly Criterion bet sizing, capped for safety.
+    """Kelly Criterion bet sizing with fractional Kelly and portfolio awareness.
+
+    Uses fractional Kelly (default half-Kelly) to reduce risk of ruin from
+    estimation error in win_rate and payoff ratio.  Also scales down when
+    many positions are held simultaneously to prevent over-leverage.
 
     .. math::
-        f^* = \\frac{p \\cdot b - q}{b}
-
-    where *p* = win_rate, *q* = 1-p, *b* = avg_win / avg_loss.
+        f^* = \\text{fractional} \\times \\frac{p \\cdot b - q}{b}
 
     Parameters
     ----------
@@ -518,6 +528,11 @@ def kelly_position_size(
         Average loss on a losing trade (absolute value, positive number).
     max_fraction : float, optional
         Hard cap on the Kelly fraction (quarter-Kelly is common practice).
+    fractional : float, optional
+        Fraction of full Kelly to use (0.5 = half-Kelly, reduces ruin risk).
+    num_positions : int, optional
+        Number of concurrent positions.  Kelly is further scaled by
+        ``1 / max(num_positions, 1)`` to prevent combined leverage > 100%.
 
     Returns
     -------
@@ -526,7 +541,6 @@ def kelly_position_size(
         non-positive, meaning the edge is absent or negative).
     """
     if avg_loss <= 0.0:
-        # Cannot compute odds ratio -- return zero (no bet)
         return 0.0
 
     p = max(0.0, min(1.0, win_rate))
@@ -540,6 +554,10 @@ def kelly_position_size(
 
     if kelly <= 0.0:
         return 0.0
+
+    # Apply fractional Kelly and portfolio scaling
+    kelly *= fractional
+    kelly /= max(num_positions, 1)
 
     return min(kelly, max_fraction)
 
@@ -682,6 +700,7 @@ def suggest_rebalance_trades(
     target_weights: Dict[str, float],
     portfolio_value: float,
     min_trade_pct: float = 0.5,
+    prices: Optional[Dict[str, float]] = None,
 ) -> List[dict]:
     """Generate a list of trades to move from current to target weights.
 
@@ -720,8 +739,9 @@ def suggest_rebalance_trades(
 
         trade_value = abs(diff) * portfolio_value
 
-        # Estimate shares (placeholder at $10/share if no price available)
-        estimated_shares = max(1, int(round(trade_value / 10.0)))
+        # Estimate shares from actual price if available, else $10/share fallback
+        share_price = (prices or {}).get(sym, 10.0) or 10.0
+        estimated_shares = max(1, int(round(trade_value / share_price)))
 
         trades.append({
             "symbol": sym,

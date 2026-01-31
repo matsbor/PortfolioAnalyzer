@@ -123,9 +123,18 @@ def calculate_smc_structure(hist_data, ticker):
             result['structure'] = 'RANGING'
         
         # 3) DETECT BOS (Break of Structure)
-        # Buffer: 1.5% for juniors (higher volatility than large-caps)
-        BOS_BUFFER = 0.015
+        # Dynamic buffer: use 0.5x ATR(14) as % of price, floored at 1.0%, capped at 4.0%
         current_price = df['Close'].iloc[-1]
+        if len(df) >= 15 and current_price > 0:
+            _tr = pd.concat([
+                df['High'] - df['Low'],
+                (df['High'] - df['Close'].shift(1)).abs(),
+                (df['Low'] - df['Close'].shift(1)).abs(),
+            ], axis=1).max(axis=1)
+            _atr14 = _tr.ewm(alpha=1/14, adjust=False).mean().iloc[-1]
+            BOS_BUFFER = max(0.01, min(0.04, 0.5 * _atr14 / current_price))
+        else:
+            BOS_BUFFER = 0.015
 
         if bullish_structure:
             # BOS up = price breaks above recent swing high
@@ -185,20 +194,25 @@ def calculate_smc_structure(hist_data, ticker):
                     'index': i,
                 })
 
+        # Expire order blocks older than 20 bars (institutional zones decay)
+        _ob_cutoff = len(df) - 20
+        active_obs = [ob for ob in order_blocks if ob['index'] >= _ob_cutoff]
+
         # Check if price is sitting in a bullish order block (support)
-        for ob in order_blocks:
+        for ob in active_obs:
             if ob['type'] == 'bullish' and ob['low'] <= current_price <= ob['high']:
                 result['confidence'] += 8
                 result['signals'].append('Price at Bullish Order Block (demand zone)')
                 break
         # Check if price is in a bearish order block (resistance)
-        for ob in order_blocks:
+        for ob in active_obs:
             if ob['type'] == 'bearish' and ob['low'] <= current_price <= ob['high']:
                 result['confidence'] -= 8
                 result['signals'].append('Price at Bearish Order Block (supply zone)')
                 break
 
-        result['order_blocks'] = order_blocks
+        result['order_blocks'] = active_obs
+        result['order_blocks_expired'] = len(order_blocks) - len(active_obs)
 
         # 6) FAIR VALUE GAPS (FVG) — imbalances the market may revisit
         fvgs = []
@@ -225,8 +239,21 @@ def calculate_smc_structure(hist_data, ticker):
                     'index': i,
                 })
 
-        # Check if price is filling a recent FVG (last 10 bars)
-        recent_fvgs = [f for f in fvgs if f['index'] >= len(df) - 10]
+        # Track FVG fill status: an FVG is filled if any subsequent bar traded through it
+        for fvg in fvgs:
+            fvg['filled'] = False
+            for k in range(fvg['index'] + 1, len(df)):
+                bar_low = df['Low'].iloc[k]
+                bar_high = df['High'].iloc[k]
+                if fvg['type'] == 'bullish' and bar_low <= fvg['bottom']:
+                    fvg['filled'] = True
+                    break
+                elif fvg['type'] == 'bearish' and bar_high >= fvg['top']:
+                    fvg['filled'] = True
+                    break
+
+        # Only consider unfilled FVGs from last 10 bars
+        recent_fvgs = [f for f in fvgs if f['index'] >= len(df) - 10 and not f['filled']]
         for fvg in recent_fvgs:
             if fvg['type'] == 'bullish' and fvg['bottom'] <= current_price <= fvg['top']:
                 result['signals'].append('Filling Bullish FVG (potential support)')
@@ -239,6 +266,7 @@ def calculate_smc_structure(hist_data, ticker):
                 break
 
         result['fvgs'] = len(fvgs)
+        result['fvgs_unfilled'] = len([f for f in fvgs if not f['filled']])
 
         # 7) LIQUIDITY SWEEPS — equal highs/lows taken (includes low-side)
         # High-side sweeps (existing)

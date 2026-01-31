@@ -554,7 +554,21 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
     # === M1: Momentum (15%) — multi-timeframe + RSI ===========================
     ret_30d = row.get('Return_30d', 0)
     ret_90d = row.get('Return_90d', 0)
-    rsi_val = row.get('RSI', 50)
+    rsi_val = row.get('RSI', None)
+
+    # Derive RSI from hist_data if not pre-computed
+    if rsi_val is None and hist_data is not None and not hist_data.empty and len(hist_data) >= 15:
+        try:
+            _close = hist_data['Close'].dropna()
+            _delta = _close.diff()
+            _gain = _delta.where(_delta > 0, 0).rolling(14).mean()
+            _loss = (-_delta.where(_delta < 0, 0)).rolling(14).mean()
+            _rs = _gain.iloc[-1] / _loss.iloc[-1] if _loss.iloc[-1] > 0 else 100
+            rsi_val = 100 - (100 / (1 + _rs))
+        except Exception:
+            rsi_val = 50
+    elif rsi_val is None:
+        rsi_val = 50
 
     # Continuous 30d scoring (no step-function dead zones)
     if ret_30d >= 20:
@@ -680,14 +694,18 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
     smc_base = 50
     smc_source = "placeholder"
     smc_state = row.get('SMC_State', None)
+    smc_score_pre = row.get('SMC_Score', None)
     if smc_state and isinstance(smc_state, str) and smc_state != 'NEUTRAL':
-        # Pre-computed SMC available — will be overridden later, but seed it
-        if 'BULL' in smc_state.upper():
+        # Pre-computed SMC available — use it directly
+        if smc_score_pre is not None and isinstance(smc_score_pre, (int, float)):
+            smc_base = max(0, min(100, float(smc_score_pre)))
+            smc_source = "pre-computed (score)"
+        elif 'BULL' in smc_state.upper():
             smc_base = 70
-            smc_source = "pre-computed"
+            smc_source = "pre-computed (state)"
         elif 'BEAR' in smc_state.upper():
             smc_base = 30
-            smc_source = "pre-computed"
+            smc_source = "pre-computed (state)"
     elif hist_data is not None and not hist_data.empty and len(hist_data) >= 50:
         # Derive basic structure from higher-highs/higher-lows pattern
         try:
@@ -769,7 +787,7 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
     # === M10: Technical Analysis Composite (8%) ===============================
     # Uses pre-computed TA_Score if available, otherwise derives from hist_data
     ta_score_raw = row.get('TA_Score', None)
-    if ta_score_raw is not None and isinstance(ta_score_raw, (int, float)) and ta_score_raw != 50:
+    if ta_score_raw is not None and isinstance(ta_score_raw, (int, float)):
         ta_score = max(0, min(100, float(ta_score_raw)))
     elif hist_data is not None and not hist_data.empty and len(hist_data) >= 20:
         # Derive TA score from price history (RSI + trend + volume)
