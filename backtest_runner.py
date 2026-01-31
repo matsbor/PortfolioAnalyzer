@@ -24,7 +24,26 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Tuple, Optional
 import yfinance as yf
+import os
 from typing import Dict, List, Tuple, Optional
+
+# Tiingo: primary data source (yfinance is fallback)
+TIINGO_AVAILABLE = False
+TiingoClient = None
+try:
+    from tiingo import TiingoClient as _TiingoClient
+    TiingoClient = _TiingoClient
+    TIINGO_AVAILABLE = True
+except ImportError:
+    pass
+
+try:
+    from dotenv import load_dotenv
+    _env_path = Path(__file__).resolve().parent / "hey.env"
+    if _env_path.exists():
+        load_dotenv(dotenv_path=_env_path)
+except ImportError:
+    pass
 
 # Import decision logic from core module (import-safe, no Streamlit)
 try:
@@ -205,131 +224,203 @@ def _save_manifest(data_dir: Path, manifest: dict):
         json.dump(manifest, f, indent=2)
 
 
+def _tiingo_records_to_df(records) -> pd.DataFrame:
+    """Convert Tiingo EOD list-of-dicts to yfinance-compatible DataFrame."""
+    if not records:
+        return pd.DataFrame()
+    df = pd.DataFrame(records)
+    if 'date' not in df.columns:
+        return pd.DataFrame()
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.set_index('date').sort_index()
+    renames = {'open': 'Open', 'high': 'High', 'low': 'Low',
+               'close': 'Close', 'volume': 'Volume',
+               'adjOpen': 'Open', 'adjHigh': 'High', 'adjLow': 'Low',
+               'adjClose': 'Close', 'adjVolume': 'Volume'}
+    for k, v in renames.items():
+        if k in df.columns and v not in df.columns:
+            df[v] = df[k]
+        elif k in df.columns and v in df.columns:
+            pass  # Don't overwrite if already mapped
+    for c in ['Open', 'High', 'Low', 'Close', 'Volume']:
+        if c not in df.columns:
+            df[c] = np.nan
+    return df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
+
+
+def _get_tiingo_client():
+    """Initialize a Tiingo client from environment. Returns None if unavailable."""
+    if not TIINGO_AVAILABLE or TiingoClient is None:
+        return None
+    api_key = (os.getenv("TIINGO_API_KEY") or "").strip()
+    if not api_key:
+        return None
+    try:
+        return TiingoClient({"api_key": api_key})
+    except Exception:
+        return None
+
+
+def _fetch_tiingo_single(client, symbol: str, start: str, end: str) -> pd.DataFrame:
+    """
+    Fetch a single symbol from Tiingo EOD API.
+    Tries geography-first variants for Canadian tickers.
+    Returns yfinance-compatible DataFrame or empty DataFrame.
+    """
+    base = symbol.upper().strip()
+    # Geography-first variants (same order as main app)
+    if base.endswith('.TO'):
+        base_clean = base[:-3]
+        variants = [base_clean, f"TSX:{base_clean}", f"{base_clean}.TO", f"{base_clean}F"]
+    elif base.endswith('.V'):
+        base_clean = base[:-2]
+        variants = [base_clean, f"TSXV:{base_clean}", f"{base_clean}.V", f"{base_clean}F"]
+    else:
+        variants = [base]
+
+    for variant in variants:
+        try:
+            data = client.get_ticker_price(
+                variant, startDate=start, endDate=end,
+                frequency="daily", fmt="json"
+            )
+            if data and isinstance(data, list) and len(data) > 0:
+                hist = _tiingo_records_to_df(data)
+                if not hist.empty and len(hist) >= 5:
+                    return hist
+        except Exception:
+            continue
+    return pd.DataFrame()
+
+
 def _fetch_with_retry(symbols: List[str], start: str, end: str, max_retries: int = 3, skip_missing: bool = False) -> Tuple[Dict[str, pd.DataFrame], List[str]]:
     """
-    Fetch price data for multiple symbols with retry logic and exponential backoff.
-    Uses yfinance.download for batch fetching to minimize HTTP calls.
-    
+    Fetch price data for multiple symbols.
+    Primary: Tiingo API (per-symbol).  Fallback: yfinance batch download.
+
     Returns:
         (results dict, failed_symbols list)
     """
     results = {}
     failed_symbols = []
-    
-    # Per-symbol sleep to reduce rate limiting (0.2-0.5s with jitter)
-    per_symbol_sleep = 0.2 + random.uniform(0, 0.3)
-    
-    for attempt in range(max_retries):
-        try:
-            # Small delay before batch download to reduce rate limiting
-            if attempt > 0:
-                time.sleep(per_symbol_sleep)
-            
-            # Batch download all symbols at once
-            hist_dict = yf.download(
-                symbols,
-                start=start,
-                end=end,
-                group_by='ticker',
-                progress=False
-            )
-            
-            # yfinance.download returns a MultiIndex DataFrame if multiple symbols
-            # or a regular DataFrame if single symbol
-            if len(symbols) == 1:
-                # Single symbol: returns regular DataFrame
-                symbol = symbols[0]
-                if not hist_dict.empty:
-                    hist_dict = {symbol: hist_dict}
-                else:
-                    hist_dict = {}
-            else:
-                # Multiple symbols: returns MultiIndex DataFrame with columns like (Symbol, 'Open'), (Symbol, 'Close'), etc.
-                # Convert to dict of DataFrames
-                if isinstance(hist_dict.columns, pd.MultiIndex):
-                    # Extract unique symbols from column level 0
-                    available_symbols = hist_dict.columns.get_level_values(0).unique()
-                    hist_dict_parsed = {}
-                    for sym in symbols:
-                        if sym in available_symbols:
-                            # Use .xs() to extract symbol's data (cross-section)
-                            try:
-                                sym_df = hist_dict.xs(sym, level=0, axis=1)
-                                if not sym_df.empty:
-                                    hist_dict_parsed[sym] = sym_df
-                            except (KeyError, ValueError):
-                                # Symbol not found in MultiIndex, skip
-                                pass
-                    hist_dict = hist_dict_parsed
-                else:
-                    # Fallback: treat as single symbol (shouldn't happen with multiple symbols)
-                    hist_dict = {}
-            
-            # Process each symbol's data
-            for symbol in symbols:
-                if symbol in hist_dict and not hist_dict[symbol].empty:
-                    hist = hist_dict[symbol]
-                    # Normalize to tz-naive UTC
+
+    # ── Phase 1: Try Tiingo first (primary source) ──
+    tiingo_client = _get_tiingo_client()
+    tiingo_remaining = list(symbols)
+
+    if tiingo_client is not None:
+        print(f"  [Tiingo] Fetching {len(symbols)} symbol(s) ...")
+        tiingo_failed = []
+        for symbol in symbols:
+            try:
+                hist = _fetch_tiingo_single(tiingo_client, symbol, start, end)
+                if not hist.empty:
                     hist = _normalize_price_df(hist)
-                    # Ensure Volume column exists
                     if 'Volume' not in hist.columns:
                         hist['Volume'] = 0.0
                     results[symbol] = hist
                 else:
-                    # Symbol failed - will be handled below
-                    if symbol not in results:
-                        results[symbol] = pd.DataFrame()
-            
-            # Check which symbols failed
-            for symbol in symbols:
-                if symbol not in results or results[symbol].empty:
-                    if symbol not in failed_symbols:
-                        failed_symbols.append(symbol)
-            
-            # If all symbols succeeded or we're allowing missing, return
-            if not failed_symbols or skip_missing:
-                return results, failed_symbols
-            
-            # If some failed and we have retries left, retry only failed ones
-            if failed_symbols and attempt < max_retries - 1:
-                symbols = failed_symbols.copy()
-                failed_symbols = []
-                # Exponential backoff with jitter: 2^attempt + random(0, 1)
-                wait_time = (2 ** attempt) + random.uniform(0, 1)
-                print(f"Some symbols failed. Retrying {len(symbols)} symbol(s) in {wait_time:.1f} seconds... (attempt {attempt + 1}/{max_retries})")
-                time.sleep(wait_time)
-                continue
-            
-            # Final attempt or skip_missing - return what we have
-            return results, failed_symbols
-            
-        except Exception as e:
-            error_str = str(e).lower()
-            is_rate_limit = '429' in error_str or 'too many requests' in error_str or 'rate limit' in error_str
-            
-            if is_rate_limit and attempt < max_retries - 1:
-                # Exponential backoff with jitter: 2^attempt + random(0, 1)
-                wait_time = (2 ** attempt) + random.uniform(0, 1)
-                print(f"Rate limit hit. Retrying in {wait_time:.1f} seconds... (attempt {attempt + 1}/{max_retries})")
-                time.sleep(wait_time)
-                continue
-            else:
-                # Non-rate-limit error or final attempt
-                if attempt == max_retries - 1:
-                    print(f"Error fetching data after {max_retries} attempts: {e}")
-                    # Mark all remaining symbols as failed
-                    for symbol in symbols:
+                    tiingo_failed.append(symbol)
+            except Exception:
+                tiingo_failed.append(symbol)
+            # Tiingo rate-limit courtesy (50 req/hr on free tier, generous on paid)
+            time.sleep(0.15 + random.uniform(0, 0.1))
+
+        tiingo_remaining = tiingo_failed
+        if tiingo_failed:
+            print(f"  [Tiingo] {len(symbols) - len(tiingo_failed)}/{len(symbols)} succeeded, "
+                  f"{len(tiingo_failed)} falling back to yfinance: {tiingo_failed}")
+        else:
+            print(f"  [Tiingo] All {len(symbols)} symbols fetched successfully")
+    else:
+        print("  [Tiingo] Not available — using yfinance for all symbols")
+
+    # ── Phase 2: yfinance fallback for anything Tiingo missed ──
+    if tiingo_remaining:
+        per_symbol_sleep = 0.2 + random.uniform(0, 0.3)
+
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    time.sleep(per_symbol_sleep)
+
+                print(f"  [yfinance] Fetching {len(tiingo_remaining)} symbol(s) (attempt {attempt + 1}/{max_retries}) ...")
+                hist_dict = yf.download(
+                    tiingo_remaining,
+                    start=start,
+                    end=end,
+                    group_by='ticker',
+                    progress=False
+                )
+
+                # Parse yfinance response
+                if len(tiingo_remaining) == 1:
+                    symbol = tiingo_remaining[0]
+                    if not hist_dict.empty:
+                        hist_dict = {symbol: hist_dict}
+                    else:
+                        hist_dict = {}
+                else:
+                    if isinstance(hist_dict.columns, pd.MultiIndex):
+                        available_symbols = hist_dict.columns.get_level_values(0).unique()
+                        hist_dict_parsed = {}
+                        for sym in tiingo_remaining:
+                            if sym in available_symbols:
+                                try:
+                                    sym_df = hist_dict.xs(sym, level=0, axis=1)
+                                    if not sym_df.empty:
+                                        hist_dict_parsed[sym] = sym_df
+                                except (KeyError, ValueError):
+                                    pass
+                        hist_dict = hist_dict_parsed
+                    else:
+                        hist_dict = {}
+
+                # Process results
+                batch_failed = []
+                for symbol in tiingo_remaining:
+                    if symbol in hist_dict and not hist_dict[symbol].empty:
+                        hist = _normalize_price_df(hist_dict[symbol])
+                        if 'Volume' not in hist.columns:
+                            hist['Volume'] = 0.0
+                        results[symbol] = hist
+                    else:
+                        if symbol not in results:
+                            batch_failed.append(symbol)
+
+                if not batch_failed or skip_missing:
+                    failed_symbols = batch_failed
+                    break
+
+                if batch_failed and attempt < max_retries - 1:
+                    tiingo_remaining = batch_failed
+                    wait_time = (2 ** attempt) + random.uniform(0, 1)
+                    print(f"  [yfinance] {len(batch_failed)} failed. Retrying in {wait_time:.1f}s ...")
+                    time.sleep(wait_time)
+                    continue
+
+                failed_symbols = batch_failed
+                break
+
+            except Exception as e:
+                error_str = str(e).lower()
+                is_rate_limit = '429' in error_str or 'too many requests' in error_str or 'rate limit' in error_str
+
+                if (is_rate_limit or attempt < max_retries - 1):
+                    wait_time = (2 ** attempt) + random.uniform(0, 1)
+                    if is_rate_limit:
+                        print(f"  [yfinance] Rate limit hit. Retrying in {wait_time:.1f}s ...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"  [yfinance] Error after {max_retries} attempts: {e}")
+                    for symbol in tiingo_remaining:
                         if symbol not in results:
                             results[symbol] = pd.DataFrame()
                             if symbol not in failed_symbols:
                                 failed_symbols.append(symbol)
-                    return results, failed_symbols
-                else:
-                    # Retry for non-rate-limit errors too (with backoff)
-                    wait_time = (2 ** attempt) + random.uniform(0, 1)
-                    time.sleep(wait_time)
-                    continue
-    
+                    break
+
     return results, failed_symbols
 
 
@@ -366,26 +457,39 @@ def load_or_fetch_price_data(symbol: str, start: str, end: str, data_dir: Path, 
     
     if offline:
         raise FileNotFoundError(f"Offline mode: Missing cached data for {symbol}. Cache file: {cache_file}")
-    
-    # Fetch from yfinance (single symbol - for backward compatibility)
-    try:
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(start=start, end=end)
-        if not hist.empty:
-            # Normalize to tz-naive (yfinance may return tz-aware index)
-            hist = _normalize_price_df(hist)
-            # Ensure Volume column exists
-            if 'Volume' not in hist.columns:
-                hist['Volume'] = 0.0
-            # Save to cache (normalized, tz-naive)
-            data_dir.mkdir(parents=True, exist_ok=True)
-            hist.to_csv(cache_file)
-            return hist
-        else:
+
+    # Fetch from Tiingo first (primary), then yfinance (fallback)
+    hist = pd.DataFrame()
+
+    tiingo_client = _get_tiingo_client()
+    if tiingo_client is not None:
+        try:
+            hist = _fetch_tiingo_single(tiingo_client, symbol, start, end)
+            if not hist.empty:
+                hist = _normalize_price_df(hist)
+                if 'Volume' not in hist.columns:
+                    hist['Volume'] = 0.0
+        except Exception:
+            hist = pd.DataFrame()
+
+    # Fallback to yfinance if Tiingo returned nothing
+    if hist.empty:
+        try:
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(start=start, end=end)
+            if not hist.empty:
+                hist = _normalize_price_df(hist)
+                if 'Volume' not in hist.columns:
+                    hist['Volume'] = 0.0
+        except Exception as e:
+            print(f"Warning: Could not fetch {symbol}: {e}")
             return pd.DataFrame()
-    except Exception as e:
-        print(f"Warning: Could not fetch {symbol}: {e}")
-        return pd.DataFrame()
+
+    if not hist.empty:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        hist.to_csv(cache_file)
+        return hist
+    return pd.DataFrame()
 
 
 def load_or_fetch_price_data_batch(
@@ -1064,15 +1168,17 @@ def simulate_day(
         }
     
     # Set trailing stop percentage based on risk_mode if not explicitly provided
+    # Junior miners are inherently volatile (20-30% swings are normal).
+    # Stops that are too tight liquidate good positions during normal volatility.
     if trailing_stop_pct is None:
         if risk_mode == 'AGGRESSIVE':
-            trailing_stop_pct = 15.0  # 15% for AGGRESSIVE (protect profits)
+            trailing_stop_pct = 25.0  # 25% for AGGRESSIVE (wider for juniors)
         elif risk_mode == 'BALANCED':
-            trailing_stop_pct = 20.0  # 20% for BALANCED
+            trailing_stop_pct = 30.0  # 30% for BALANCED (junior-miner appropriate)
         elif risk_mode == 'CONSERVATIVE':
-            trailing_stop_pct = 25.0  # 25% for CONSERVATIVE (less sensitive)
+            trailing_stop_pct = 35.0  # 35% for CONSERVATIVE (widest, let positions breathe)
         else:
-            trailing_stop_pct = 20.0  # Default
+            trailing_stop_pct = 30.0  # Default
     
     # Apply risk_mode settings to macro_regime
     if risk_mode == 'AGGRESSIVE':
@@ -2093,8 +2199,9 @@ def simulate_day(
     if is_bull_regime and cash > 0 and total_value > 0:
         cash_pct = (cash / total_value) * 100
         # Aggressive Deployment Logic: Minimum Invested floor
-        # If risk_mode is AGGRESSIVE or BALANCED and cash > 20%, deploy aggressively
-        if risk_mode in ['AGGRESSIVE', 'BALANCED'] and cash_pct > 20.0:
+        # If risk_mode is AGGRESSIVE or BALANCED and cash > 15%, deploy aggressively
+        # (Lowered from 20% to 15% to reduce cash drag after trailing stop sells)
+        if risk_mode in ['AGGRESSIVE', 'BALANCED'] and cash_pct > 15.0:
             # Find buy candidates (alpha >= 40, not vetoed, Buy action or HOLD with positive alpha)
             # In High-Torque Mode, we deploy even with alpha as low as 40
             buy_candidates = []
@@ -2111,8 +2218,8 @@ def simulate_day(
             
             # Deploy to top 3 Alpha-ranked symbols
             top_candidates = buy_candidates[:3]
-            # Calculate minimum deployment: ensure cash doesn't exceed 20% after deployment
-            min_deployment = max(0, cash - (total_value * 0.20))  # Bring cash down to 20% max
+            # Calculate minimum deployment: ensure cash doesn't exceed 15% after deployment
+            min_deployment = max(0, cash - (total_value * 0.15))  # Bring cash down to 15% max
             target_deployment = min(min_deployment, cash * 0.95)  # Deploy up to 95% of available cash
             deployed_cash = 0.0
             max_position_size = max_position_pct  # Use CLI parameter (default 10%, can be 15% in AGGRESSIVE)

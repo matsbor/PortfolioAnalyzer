@@ -676,8 +676,46 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
     breakdown.append(f"M6 RelStrength: {rel_score:.0f}/100 x 7% = {models['M6_RelStrength']:.1f}")
 
     # === M7: SMC (8%) — placeholder, replaced after SMC calculation ===========
-    models['M7_SMC'] = 50 * 0.08
-    breakdown.append(f"M7 SMC: 50/100 x 8% = {models['M7_SMC']:.1f} (recalculated later)")
+    # Derive a basic structure score from price data when SMC is not pre-computed
+    smc_base = 50
+    smc_source = "placeholder"
+    smc_state = row.get('SMC_State', None)
+    if smc_state and isinstance(smc_state, str) and smc_state != 'NEUTRAL':
+        # Pre-computed SMC available — will be overridden later, but seed it
+        if 'BULL' in smc_state.upper():
+            smc_base = 70
+            smc_source = "pre-computed"
+        elif 'BEAR' in smc_state.upper():
+            smc_base = 30
+            smc_source = "pre-computed"
+    elif hist_data is not None and not hist_data.empty and len(hist_data) >= 50:
+        # Derive basic structure from higher-highs/higher-lows pattern
+        try:
+            close = hist_data['Close'].dropna()
+            # Check recent 50 bars for HH/HL (bullish) or LH/LL (bearish)
+            mid = len(close) // 2
+            first_half_high = close.iloc[:mid].max()
+            second_half_high = close.iloc[mid:].max()
+            first_half_low = close.iloc[:mid].min()
+            second_half_low = close.iloc[mid:].min()
+
+            if second_half_high > first_half_high and second_half_low > first_half_low:
+                smc_base = 72  # Higher highs + higher lows (bullish structure)
+                smc_source = "HH/HL pattern"
+            elif second_half_high < first_half_high and second_half_low < first_half_low:
+                smc_base = 28  # Lower highs + lower lows (bearish structure)
+                smc_source = "LH/LL pattern"
+            elif second_half_high > first_half_high:
+                smc_base = 58  # Higher high but not higher low (weak bullish)
+                smc_source = "HH pattern"
+            elif second_half_low < first_half_low:
+                smc_base = 42  # Lower low but not lower high (weak bearish)
+                smc_source = "LL pattern"
+        except Exception:
+            pass
+
+    models['M7_SMC'] = smc_base * 0.08
+    breakdown.append(f"M7 SMC: {smc_base}/100 x 8% = {models['M7_SMC']:.1f} ({smc_source})")
 
     # === M8: Stage/Metal Fit (5%) — stage + metal regime alignment ============
     stage = row.get('stage', 'Explorer')
@@ -729,11 +767,49 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
     breakdown.append(f"M9 VolMomentum: {vol_momentum_score}/100 x 7% = {models['M9_VolMomentum']:.1f}")
 
     # === M10: Technical Analysis Composite (8%) ===============================
-    # Uses pre-computed TA_Score from technical_analysis.py (0-100, 50=neutral)
-    ta_score_raw = row.get('TA_Score', 50)
-    if not isinstance(ta_score_raw, (int, float)):
-        ta_score_raw = 50
-    ta_score = max(0, min(100, float(ta_score_raw)))
+    # Uses pre-computed TA_Score if available, otherwise derives from hist_data
+    ta_score_raw = row.get('TA_Score', None)
+    if ta_score_raw is not None and isinstance(ta_score_raw, (int, float)) and ta_score_raw != 50:
+        ta_score = max(0, min(100, float(ta_score_raw)))
+    elif hist_data is not None and not hist_data.empty and len(hist_data) >= 20:
+        # Derive TA score from price history (RSI + trend + volume)
+        try:
+            close = hist_data['Close'].dropna()
+            _ta = 50  # Start neutral
+            # RSI component
+            if len(close) >= 15:
+                delta = close.diff()
+                gain = delta.where(delta > 0, 0).rolling(14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+                _rs = gain.iloc[-1] / loss.iloc[-1] if loss.iloc[-1] > 0 else 100
+                _rsi = 100 - (100 / (1 + _rs))
+                if _rsi < 30:
+                    _ta += 15  # Oversold
+                elif _rsi > 70:
+                    _ta -= 10  # Overbought
+                elif _rsi > 50:
+                    _ta += 5   # Bullish
+            # Trend component (price vs 20d MA)
+            if len(close) >= 20:
+                ma20 = close.tail(20).mean()
+                if close.iloc[-1] > ma20 * 1.03:
+                    _ta += 10
+                elif close.iloc[-1] < ma20 * 0.97:
+                    _ta -= 10
+            # Volume trend (rising volume on up days)
+            if 'Volume' in hist_data.columns and len(hist_data) >= 10:
+                recent = hist_data.tail(10)
+                up_vol = recent.loc[recent['Close'].diff() > 0, 'Volume'].mean()
+                dn_vol = recent.loc[recent['Close'].diff() < 0, 'Volume'].mean()
+                if up_vol > 0 and dn_vol > 0 and up_vol > dn_vol * 1.3:
+                    _ta += 8  # Accumulation
+                elif dn_vol > 0 and up_vol > 0 and dn_vol > up_vol * 1.3:
+                    _ta -= 8  # Distribution
+            ta_score = max(0, min(100, _ta))
+        except Exception:
+            ta_score = 50
+    else:
+        ta_score = 50
 
     models['M10_TA'] = ta_score * 0.08
     breakdown.append(f"M10 TA: {ta_score:.0f}/100 x 8% = {models['M10_TA']:.1f} (RSI/MACD/BB/OBV/ADX)")

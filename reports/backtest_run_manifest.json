@@ -1,17 +1,31 @@
 {
-  "git_commit_hash": "f5b8c4d355e8b50c0d41c355b9474615130d249d",
+  "git_commit_hash": "eb9c673623e0d8dcc1f770477b8e60a09ee84b91",
   "python_version": "3.11.14 (main, Oct 10 2025, 08:54:04) [GCC 13.3.0]",
   "platform": "Linux-4.4.0-x86_64-with-glibc2.39",
-  "run_timestamp_utc": "2026-01-30T06:11:42.064094+00:00",
-  "cache_dir": "/tmp/pytest-of-root/pytest-4/test_default_backtest_does_not0/cache",
+  "run_timestamp_utc": "2026-01-31T02:30:56.934319+00:00",
+  "cache_dir": ".backtest_cache",
   "symbols_loaded": [
-    "TEST1",
-    "TEST2"
+    "AEM",
+    "AG",
+    "AGI",
+    "BTG",
+    "CCJ",
+    "DNN",
+    "EQX",
+    "GOLD",
+    "HL",
+    "KGC",
+    "MAG",
+    "NEM",
+    "NXE",
+    "OR",
+    "PAAS"
   ],
   "symbols_skipped": [],
   "report_hashes": {
-    "backtest_summary.json": "1cd812c6257cf23b847820481f3114b67816021e8cc676fb9d251e319f07fd2b",
-    "backtest_daily.csv": "492b5ef3ab27413b90cbe59a54ca76c8c9bdbd9834e0261a1f394cc2e91a0bf5"
+    "backtest_summary.json": "e6ec853a771c50692af4a4b4b7cc8c521d7da4ba1c4c6997edc3cb739041c3f7",
+    "backtest_trades.csv": "fcdeaf18e60897646032430af4509f460bde3506ff70ca4b177dd73af3597522",
+    "backtest_daily.csv": "03d9a65645e0dfe0308c13ce6ca098ec3674e39e8d275071741c498c23677552"
   },
   "sell_policy": "veto_only",
   "offline_mode": true
