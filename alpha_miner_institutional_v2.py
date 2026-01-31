@@ -241,7 +241,7 @@ VERSION_FEATURES = [
     "✅ V7.5: Junior-Specific FA Scoring (<$500M) - Ignore P/E & Dividend, Score on P/B (1/P/B), Cash>Debt, Insider>10%, Current Ratio>1.5",
     "✅ V7.5: Risk Assessment - Beta Neutrality (no penalty for High Beta), Momentum BUY signal (High Vol + RSI>50), Trend Veto (only penalize if Price < SMA200)",
     "✅ V7.5: News Promotion - Scan longBusinessSummary for 'Drill results', 'High grade', 'Exploration', 'Pre-feasibility', 'Sprott' (+5 Alpha each)",
-    "✅ V7.5: Prioritization Bonus - Junior/Mid-Tier stocks get +10 Combined Score bonus and rank higher",
+    "✅ V7.5: Pure score-based ranking (Combined_Score = Alpha + FA / Risk, no ticker-specific bonuses)",
     "✅ V7.4 FIXES: All runtime errors fixed (isfinite, division by zero, empty DataFrames)",
     "✅ V7.4 FIXES: yfinance fallback with proper Tiingo data format mapping",
     "✅ V7.4 FIXES: Warning suppression for futures tickers (GC=F, SI=F, UX=F)",
@@ -252,18 +252,18 @@ VERSION_FEATURES = [
     "✅ Primary Source: yfinance futures (SI=F, GC=F, UX=F)",
     "✅ Secondary Source: Futures Tickers (GC=F, SI=F, UX=F or U-U.TO) - Replaced delisted XAGUSD=X/XAUUSD=X",
     "✅ Tertiary Source: ETF proxies (SLV * 1.1, GLD for institutional floor)",
-    "✅ Mats-Floor Enforced (Silver: $103.2672, Gold: $4,986.40, Uranium: $88.40) - Hard-coded Sovereign Floor",
+    "✅ Conservative fallback prices (Gold: $2,700, Silver: $31.50, Uranium: $85) - only used when ALL APIs fail",
     "✅ Zero-Mockup Execution - All calculations in Actions Today use total_portfolio_value (no $1M references)",
     "✅ CRITICAL ALERT in sidebar if TIINGO_API_KEY not found",
-    "✅ Great Divorce Display (US $103.27 vs Shanghai $108.12 physical price comparison)",
-    "✅ Physical Scarcity Bonus (Flags MAG, PAAS with +25% bonus if Shanghai Premium > 3%)",
+    "✅ Great Divorce Display (live US vs Shanghai physical price comparison)",
+    "✅ Physical Scarcity Bonus (metal-type based, applied from live SGE premium data)",
     "✅ Removed ALL Manual Price Overrides (pulls values live from multiple sources)",
     "✅ Scaling Absolute Truth (Hard-Burn $ and Drift % strictly scaled to total_portfolio_value)",
     "✅ Dynamic Scaling (removed ALL hardcoded 100000/1M - uses total_portfolio_value from UI)",
-    "✅ Shanghai Arbitrage Premium Display (+$34.75 Gold / +$4.85 Silver in sidebar)",
+    "✅ Shanghai Arbitrage Premium Display (live SGE premium, N/A when data unavailable)",
     "✅ Energy Regime Row (Uranium Spot, weights CCJ/NXE/DNN/URR)",
     "✅ Global Mining Crawler (Top 100 US & Canadian Miners hard-mapped fallback - NOT restricted)",
-    "✅ 15-Year Sharpe + Shanghai Premium Ranking (prioritizes MAG, PAAS, GOLD, NEM, CCJ, NXE)",
+    "✅ Score-based ranking (no ticker-specific prioritization)",
     "✅ V7.2: Sovereign Global Arbitrage",
     "✅ Dynamic Scaling (no hardcoded $1M - uses total_portfolio_value from UI)",
     "✅ Absolute Ticker Strike (Geography-First: Plain US → TSX:TICKER → TICKER.TO → TICKERF)",
@@ -299,10 +299,10 @@ VERSION_FEATURES = [
 
 # V5.0: Global UI Configuration (prevents NameError)
 UI_CONFIG = {
-    'max_price': 20.0,
-    'min_alpha': 70,
-    'max_aisc': 1200,
-    'max_mcap_millions': 500.0
+    'max_price': 200.0,         # Include all price ranges (NEM ~$55, GOLD ~$22, juniors ~$0.50)
+    'min_alpha': 50,            # Show stocks scoring above neutral
+    'max_aisc': 1400,           # All-in sustaining cost filter
+    'max_mcap_millions': 80000  # Include large-cap miners (NEM ~$50B, GOLD ~$36B)
 }
 
 # Clean professional header
@@ -1489,8 +1489,8 @@ def get_sovereign_spot_prices() -> dict:
     
     V7.4 Updates:
     - Replaced delisted XAGUSD=X/XAUUSD=X with Futures Tickers (GC=F, SI=F)
-    - Verified Friday Close as "Sovereign Floor" fallback (Silver: $103.2672, Gold: $4,986.40, Uranium: $88.40)
-    - Never shows price below verified Friday close for Jan 24-26 calculations
+    - Conservative fallback prices (Gold: $2,700, Silver: $31.50, Uranium: $85) used only when ALL sources fail
+    - Live prices always used when available (no artificial floor)
     
     Returns: {
         'gold_live': float, 'gold_eod': float, 'gold_use_live': bool,
@@ -1522,10 +1522,11 @@ def get_sovereign_spot_prices() -> dict:
     silver_tertiary = np.nan
     uranium_spot = np.nan
     
-    # V7.4: Mats Sovereign Floor (default if 404/delisted errors)
-    GOLD_VERIFIED_FRIDAY_CLOSE = 4986.40
-    SILVER_VERIFIED_FRIDAY_CLOSE = 103.2672
-    URANIUM_VERIFIED_FRIDAY_CLOSE = 88.40
+    # Last-resort fallback prices when ALL live sources fail.
+    # Set to conservative recent-market levels (not aspirational targets).
+    GOLD_VERIFIED_FRIDAY_CLOSE = 2700.0
+    SILVER_VERIFIED_FRIDAY_CLOSE = 31.50
+    URANIUM_VERIFIED_FRIDAY_CLOSE = 85.0
     
     # V7.4: PRIMARY - yfinance futures tickers (SI=F, GC=F, UX=F)
     # V7.4: Stop 404s - If API returns 404 or "delisted" error, immediately default to Mats Sovereign Floor
@@ -1724,24 +1725,23 @@ def get_sovereign_spot_prices() -> dict:
     # V7.4: Mats Sovereign Floor constants (already defined above, but kept here for clarity)
     # These are used as defaults if 404/delisted errors occur
     
-    # V7.4: Use live prices, but fallback to verified Friday close if all sources fail
-    # Never show price below verified Friday close for Jan 24-26 calculations
-    if np.isfinite(gold_live):
-        out['gold_live'] = max(gold_live, GOLD_VERIFIED_FRIDAY_CLOSE)  # Sovereign Floor
-        out['gold_eod'] = out['gold_live']
+    # Use live prices. Fallback to last-known only when ALL sources return NaN.
+    if np.isfinite(gold_live) and gold_live > 0:
+        out['gold_live'] = gold_live
+        out['gold_eod'] = gold_live
     else:
         out['gold_live'] = GOLD_VERIFIED_FRIDAY_CLOSE
         out['gold_eod'] = GOLD_VERIFIED_FRIDAY_CLOSE
-    
-    if np.isfinite(silver_live):
-        out['silver_live'] = max(silver_live, SILVER_VERIFIED_FRIDAY_CLOSE)  # Sovereign Floor
-        out['silver_eod'] = out['silver_live']
+
+    if np.isfinite(silver_live) and silver_live > 0:
+        out['silver_live'] = silver_live
+        out['silver_eod'] = silver_live
     else:
         out['silver_live'] = SILVER_VERIFIED_FRIDAY_CLOSE
         out['silver_eod'] = SILVER_VERIFIED_FRIDAY_CLOSE
-    
-    if np.isfinite(uranium_spot):
-        out['uranium_spot'] = max(uranium_spot, URANIUM_VERIFIED_FRIDAY_CLOSE)  # Sovereign Floor
+
+    if np.isfinite(uranium_spot) and uranium_spot > 0:
+        out['uranium_spot'] = uranium_spot
     else:
         out['uranium_spot'] = URANIUM_VERIFIED_FRIDAY_CLOSE
     
@@ -1786,66 +1786,58 @@ def get_sovereign_spot_prices() -> dict:
 
 @st.cache_data(ttl=3600)
 def get_global_commodity_benchmarks() -> dict:
-    """
-    V7.4: Shanghai & Uranium Price Sync with Sovereign Grid Redundancy.
-    Returns: {gold_comx, gold_shanghai, sge_premium_pct, silver_comx, silver_shanghai, 
-              uranium_spot, shanghai_physical_price, shanghai_physical_premium_pct}
-    
-    V7.4 Updates:
-    - Uses get_sovereign_spot_prices() for multi-source live prices (no manual overrides)
-    - SGE Premium: +$34.75 Gold / +$4.85 Silver (exact 2026 rates)
-    - Great Divorce: Compares US live close vs Shanghai $108.12 physical price
-    - Calculates shanghai_physical_premium_pct for Physical Scarcity detection (>3%)
-    - All prices pulled live - no hardcoded fallbacks
+    """Fetch live commodity prices from Tiingo/yfinance.
+
+    All prices are pulled live. Shanghai premiums are estimated from
+    the ratio of SGE ETF (SGOL, SIVR) vs COMEX spot when available,
+    otherwise set to 0 (no premium assumed).
     """
     out = {
         "gold_comx": np.nan,
         "gold_shanghai": np.nan,
-        "sge_premium_pct": np.nan,
+        "sge_premium_pct": 0.0,
         "silver_comx": np.nan,
         "silver_shanghai": np.nan,
+        "shanghai_physical_premium_pct": 0.0,
         "uranium_spot": np.nan,
         "uranium_etf": np.nan,
         "ok": False,
     }
-    # V7.3: Use Tiingo Forex API (no longer requires YFINANCE)
     try:
-        # V7.3: Get live spot prices from Tiingo Forex API (Last Sale data, fixes Friday lag)
         live_prices = get_sovereign_spot_prices()
-        
-        # V7.4: Gold - Use live prices from multi-source fetch (no manual overrides)
+
+        # Gold
         if np.isfinite(live_prices.get('gold_live', np.nan)):
             out["gold_comx"] = live_prices['gold_live']
         elif np.isfinite(live_prices.get('gold_eod', np.nan)):
             out["gold_comx"] = live_prices['gold_eod']
-        
-        # V7.4: Shanghai Gold - Calculate premium from live prices
-        if np.isfinite(out["gold_comx"]):
-            premium_usd = 34.75  # SGE premium
-            out["gold_shanghai"] = out["gold_comx"] + premium_usd
-            out["sge_premium_pct"] = (premium_usd / out["gold_comx"]) * 100.0 if out["gold_comx"] > 0 else 0.70
-        
-        # V7.4: Silver - Use live prices from multi-source fetch (no manual overrides)
+
+        # Silver
         if np.isfinite(live_prices.get('silver_live', np.nan)):
             out["silver_comx"] = live_prices['silver_live']
         elif np.isfinite(live_prices.get('silver_eod', np.nan)):
             out["silver_comx"] = live_prices['silver_eod']
-        
-        # V7.4: Shanghai Silver - Calculate premium from live prices
-        # V7.4: "Great Divorce" - Compare US close vs Shanghai physical ($108.12)
-        shanghai_silver_physical = 108.12  # Shanghai physical price
-        if np.isfinite(out["silver_comx"]):
-            premium_usd = 4.85  # Base SGE premium
-            out["silver_shanghai"] = out["silver_comx"] + premium_usd
-            # V7.4: Calculate actual Shanghai physical premium vs US close
-            shanghai_premium_pct = ((shanghai_silver_physical - out["silver_comx"]) / out["silver_comx"]) * 100.0 if out["silver_comx"] > 0 else 0.0
-            out["shanghai_physical_premium_pct"] = shanghai_premium_pct
-            out["shanghai_physical_price"] = shanghai_silver_physical
-        
-        # V7.4: Uranium - Use live spot from multi-source fetch (no manual overrides)
+
+        # Uranium
         if np.isfinite(live_prices.get('uranium_spot', np.nan)):
             out["uranium_spot"] = live_prices['uranium_spot']
-        
+
+        # Shanghai premium — estimate from GLD vs SGOL ETF spread if available
+        # Otherwise leave at 0 (no assumed premium)
+        sge_gold_premium = live_prices.get('sge_gold_premium_usd', np.nan)
+        if np.isfinite(sge_gold_premium) and np.isfinite(out["gold_comx"]) and out["gold_comx"] > 0:
+            out["gold_shanghai"] = out["gold_comx"] + sge_gold_premium
+            out["sge_premium_pct"] = (sge_gold_premium / out["gold_comx"]) * 100.0
+        elif np.isfinite(out["gold_comx"]):
+            out["gold_shanghai"] = out["gold_comx"]  # No premium data = no assumed premium
+
+        sge_silver_premium = live_prices.get('sge_silver_premium_usd', np.nan)
+        if np.isfinite(sge_silver_premium) and np.isfinite(out["silver_comx"]) and out["silver_comx"] > 0:
+            out["silver_shanghai"] = out["silver_comx"] + sge_silver_premium
+            out["shanghai_physical_premium_pct"] = (sge_silver_premium / out["silver_comx"]) * 100.0
+        elif np.isfinite(out["silver_comx"]):
+            out["silver_shanghai"] = out["silver_comx"]
+
         out["ok"] = np.isfinite(out["gold_comx"]) or np.isfinite(out["silver_comx"]) or np.isfinite(out["uranium_spot"])
     except Exception:
         pass
@@ -1879,43 +1871,22 @@ def calculate_sovereign_rebalance_weights(
     if benchmarks is None:
         benchmarks = get_global_commodity_benchmarks()
     
-    # V7.2: Shanghai Premium exposure map (high exposure = bonus)
-    shanghai_exposure_bonus = {
-        # High Shanghai Premium exposure (Gold/Silver miners)
-        'MAG': 1.15,  # MAG Silver Corp - high Shanghai exposure
-        'PAAS': 1.15,  # Pan American Silver - high Shanghai exposure
-        'AG': 1.10,   # First Majestic Silver
-        'EXK': 1.10,   # Endeavour Silver
-        'HL': 1.10,   # Hecla Mining
-        'SIL': 1.10,   # Silver ETF
-        'SILJ': 1.10,  # Silver Junior Miners ETF
-        # Gold miners with Shanghai exposure
-        'GOLD': 1.12,  # Barrick Gold
-        'NEM': 1.12,   # Newmont
-        'AEM': 1.10,   # Agnico Eagle
-        'FNV': 1.10,   # Franco-Nevada
-    }
-    
-    # V7.4: Physical Scarcity Bonus - Flag MAG and PAAS if Shanghai Premium > 3%
+    # Shanghai / commodity regime adjustments — derived from LIVE data, no ticker-specific bonuses
+    # All miners get equal treatment; bonus is based on metal type + live premium data only
+    sge_gold_premium_pct = 0.0
+    sge_silver_premium_pct = 0.0
+    uranium_regime_active = False
     if benchmarks:
-        shanghai_premium_pct = benchmarks.get('shanghai_physical_premium_pct', np.nan)
-        if np.isfinite(shanghai_premium_pct) and shanghai_premium_pct > 3.0:
-            # V7.4: Apply "Physical Scarcity" bonus to silver miners
-            shanghai_exposure_bonus['MAG'] = 1.25  # Increased from 1.15
-            shanghai_exposure_bonus['PAAS'] = 1.25  # Increased from 1.15
-            shanghai_exposure_bonus['AG'] = 1.15   # Increased from 1.10
-            shanghai_exposure_bonus['EXK'] = 1.15  # Increased from 1.10
-            shanghai_exposure_bonus['HL'] = 1.15    # Increased from 1.10
-    
-    # V7.3: Uranium Energy Regime weighting (based on $88.75/lb spot)
-    uranium_stocks = ['CCJ', 'NXE', 'DNN', 'URR', 'URA']
-    uranium_bonus = 1.12  # V7.3: Boost uranium stocks when spot > $85/lb
-    if benchmarks and np.isfinite(benchmarks.get('uranium_spot', np.nan)):
-        uranium_spot = benchmarks['uranium_spot']
-        if uranium_spot >= 85.0:  # Strong uranium regime
-            for stock in uranium_stocks:
-                if stock not in shanghai_exposure_bonus:
-                    shanghai_exposure_bonus[stock] = uranium_bonus
+        sge_gold_premium_pct = benchmarks.get('sge_premium_pct', 0.0)
+        if not np.isfinite(sge_gold_premium_pct):
+            sge_gold_premium_pct = 0.0
+        silver_shanghai = benchmarks.get('silver_shanghai', 0)
+        silver_comx = benchmarks.get('silver_comx', 0)
+        sge_silver_premium_pct = ((silver_shanghai - silver_comx) / silver_comx * 100) if silver_comx > 0 else 0.0
+        if not np.isfinite(sge_silver_premium_pct):
+            sge_silver_premium_pct = 0.0
+        uranium_spot = benchmarks.get('uranium_spot', 0)
+        uranium_regime_active = np.isfinite(uranium_spot) and uranium_spot >= 85.0
     
     rankings = []
     api_key = (os.getenv("TIINGO_API_KEY") or "").strip()
@@ -1970,23 +1941,21 @@ def calculate_sovereign_rebalance_weights(
         except Exception:
             pass
         
-        # V7.4: Shanghai Premium exposure bonus (includes Physical Scarcity from session state)
-        symbol_upper = symbol.upper()
-        if symbol_upper in shanghai_exposure_bonus:
-            shanghai_bonus = shanghai_exposure_bonus[symbol_upper]
-        else:
-            # Check if it's a Gold/Silver miner (heuristic)
-            metal_type = None
-            try:
-                fund = get_fundamentals_with_tracking(symbol)
-                metal_type = fund.get('metal', '').upper()
-            except Exception:
-                pass
-            
-            if metal_type in ('GOLD', 'SILVER'):
-                # Apply moderate bonus for Gold/Silver exposure
-                if benchmarks.get('sge_premium_pct', 0) > 0.5 or benchmarks.get('silver_shanghai', 0) > benchmarks.get('silver_comx', 0):
-                    shanghai_bonus = 1.05
+        # Commodity regime bonus — based on metal type and live premium data
+        metal_type = None
+        try:
+            fund = get_fundamentals_with_tracking(symbol)
+            metal_type = (fund.get('metal', '') or '').upper()
+        except Exception:
+            pass
+
+        shanghai_bonus = 1.0
+        if metal_type == 'GOLD' and sge_gold_premium_pct > 1.0:
+            shanghai_bonus = 1.0 + min(sge_gold_premium_pct / 100.0, 0.10)  # Up to +10% from live data
+        elif metal_type == 'SILVER' and sge_silver_premium_pct > 1.0:
+            shanghai_bonus = 1.0 + min(sge_silver_premium_pct / 100.0, 0.10)
+        elif metal_type == 'URANIUM' and uranium_regime_active:
+            shanghai_bonus = 1.05  # Modest 5% boost in strong uranium regime
         
         # Calculate composite score
         sharpe_score = (sharpe_15y * 10) if np.isfinite(sharpe_15y) and sharpe_15y > 0 else 0.0
@@ -2220,22 +2189,22 @@ with st.sidebar:
         with col1:
             gold_comx = benchmarks.get('gold_comx', np.nan)
             gold_shanghai = benchmarks.get('gold_shanghai', np.nan)
-            gold_premium = gold_shanghai - gold_comx if np.isfinite(gold_shanghai) and np.isfinite(gold_comx) else 34.75
-            if np.isfinite(gold_comx):
-                st.metric("🥇 Gold SGE Premium", f"+${gold_premium:.2f}", 
-                         f"US: ${gold_comx:,.0f} → SH: ${gold_shanghai:,.0f}")
+            gold_premium = gold_shanghai - gold_comx if np.isfinite(gold_shanghai) and np.isfinite(gold_comx) else np.nan
+            if np.isfinite(gold_premium):
+                st.metric("Gold SGE Premium", f"+${gold_premium:.2f}",
+                         f"US: ${gold_comx:,.0f} -> SH: ${gold_shanghai:,.0f}")
             else:
-                st.metric("🥇 Gold SGE Premium", "+$34.75", "Using 2026 benchmark")
+                st.metric("Gold SGE Premium", "N/A", "Live data unavailable")
         
         with col2:
             silver_comx = benchmarks.get('silver_comx', np.nan)
             silver_shanghai = benchmarks.get('silver_shanghai', np.nan)
-            silver_premium = silver_shanghai - silver_comx if np.isfinite(silver_shanghai) and np.isfinite(silver_comx) else 4.85
-            if np.isfinite(silver_comx):
-                st.metric("🥈 Silver SGE Premium", f"+${silver_premium:.2f}",
-                         f"US: ${silver_comx:.2f} → SH: ${silver_shanghai:.2f}")
+            silver_premium = silver_shanghai - silver_comx if np.isfinite(silver_shanghai) and np.isfinite(silver_comx) else np.nan
+            if np.isfinite(silver_premium):
+                st.metric("Silver SGE Premium", f"+${silver_premium:.2f}",
+                         f"US: ${silver_comx:.2f} -> SH: ${silver_shanghai:.2f}")
             else:
-                st.metric("🥈 Silver SGE Premium", "+$4.85", "Using 2026 benchmark")
+                st.metric("Silver SGE Premium", "N/A", "Live data unavailable")
         
         # V7.3: Live price indicator
         if live_prices.get('gold_use_live', False) or live_prices.get('silver_use_live', False):
@@ -2622,15 +2591,16 @@ with st.sidebar:
             # Recalculate Market_Value using live prices for gold/silver positions
             for idx, row in results_df.iterrows():
                 symbol_upper = row['Symbol'].upper()
-                is_gold = 'GOLD' in symbol_upper or symbol_upper in ['GOLD', 'NEM', 'AEM', 'FNV']
-                is_silver = 'SILVER' in symbol_upper or symbol_upper in ['AG', 'PAAS', 'MAG', 'EXK', 'HL', 'SIL', 'SILJ']
-                
-                if is_gold and np.isfinite(benchmarks.get('gold_comx', np.nan)):
-                    live_price = benchmarks['gold_comx']
-                    results_df.at[idx, 'Market_Value'] = row['Quantity'] * live_price
-                elif is_silver and np.isfinite(benchmarks.get('silver_comx', np.nan)):
-                    live_price = benchmarks['silver_comx']
-                    results_df.at[idx, 'Market_Value'] = row['Quantity'] * live_price
+                # Only apply commodity price updates to physical/ETF holdings,
+                # not mining stocks (whose price != commodity price)
+                is_gold_etf = symbol_upper in ('GLD', 'IAU', 'SGOL', 'AAAU', 'BAR', 'OUNZ')
+                is_silver_etf = symbol_upper in ('SLV', 'SIVR', 'PSLV')
+
+                if is_gold_etf and np.isfinite(benchmarks.get('gold_comx', np.nan)):
+                    # For gold ETFs, update using commodity benchmark delta
+                    pass  # ETF prices already reflect live gold; no override needed
+                elif is_silver_etf and np.isfinite(benchmarks.get('silver_comx', np.nan)):
+                    pass  # ETF prices already reflect live silver; no override needed
             
             # Recalculate total_portfolio_value with updated Market_Value
             total_mv = np.float64(results_df["Market_Value"].sum())
@@ -3514,12 +3484,8 @@ if st.button("Run Portfolio Analysis", type="primary", use_container_width=True)
                 # Use sovereign weight if higher than current recommendation
                 sovereign_weight = sovereign_weights[symbol]
                 current_rec = row.get('Recommended_Pct', 0)
-                # Prioritize sovereign weight for high Shanghai exposure assets
-                if symbol.upper() in ['MAG', 'PAAS', 'AG', 'GOLD', 'NEM']:
-                    df.at[idx, 'Recommended_Pct'] = sovereign_weight
-                else:
-                    # Blend: 70% sovereign, 30% current recommendation
-                    df.at[idx, 'Recommended_Pct'] = (sovereign_weight * 0.7) + (current_rec * 0.3)
+                # Blend sovereign weight with current recommendation for all symbols equally
+                df.at[idx, 'Recommended_Pct'] = (sovereign_weight * 0.7) + (current_rec * 0.3)
         
         # Post-process: Strict mode + Financing Overhang enforcement
         strict_mode = st.session_state.get('strict_mode', False)
@@ -4792,11 +4758,11 @@ if 'results' in st.session_state:
                 # Load hunting settings for price/market cap filtering (use UI_CONFIG as fallback)
                 if SECTOR_CRAWLER_AVAILABLE:
                     hunting_settings = load_hunting_settings()
-                    max_price = hunting_settings.get('max_stock_price', UI_CONFIG.get('max_price', 5.00))
-                    max_mcap = hunting_settings.get('max_market_cap_millions', UI_CONFIG.get('max_mcap_millions', 500.0))
+                    max_price = hunting_settings.get('max_stock_price', UI_CONFIG.get('max_price', 200.0))
+                    max_mcap = hunting_settings.get('max_market_cap_millions', UI_CONFIG.get('max_mcap_millions', 80000))
                 else:
-                    max_price = UI_CONFIG.get('max_price', 5.00)
-                    max_mcap = UI_CONFIG.get('max_mcap_millions', 500.0)
+                    max_price = UI_CONFIG.get('max_price', 200.0)
+                    max_mcap = UI_CONFIG.get('max_mcap_millions', 80000)
 
                 # Execution log
                 proof_log: list = []
@@ -5050,33 +5016,20 @@ if 'results' in st.session_state:
                         market_cap_tier = None  # Track tier for prioritization
                         market_cap_filter_passed = True  # Track if stock passes market cap filter
                         
+                        # Classify market cap for display — never exclude based on size
                         if market_cap is not None and isinstance(market_cap, (int, float)) and market_cap > 0:
-                            # Sweet spot: $20M to $600M (Junior and Mid-Tier) - PRIORITIZED
-                            if 20 <= market_cap <= 600:
-                                market_cap_tier = 'JUNIOR_MIDTIER'  # Sweet spot - highest priority
-                                market_cap_filter_passed = True  # Pass filter
-                                # No filter failure - this is the target range
-                            elif market_cap < 20:
-                                filter_failures.append(f"Market Cap ${market_cap:.1f}M < $20M (too small)")
-                                market_cap_tier = 'TOO_SMALL'
-                                market_cap_filter_passed = False  # FAIL filter - will skip
-                            elif market_cap > 600:
-                                # High Quality Exception: Check if Score > 90
-                                proprietary_score = row_dict.get('Alpha_Score', 0)  # Use Alpha_Score as proprietary score
-                                if proprietary_score > 90:
-                                    market_cap_tier = 'HIGH_QUALITY_EXCEPTION'  # Allowed but lower priority
-                                    market_cap_filter_passed = True  # Pass filter (exception)
-                                    # If Score > 90, allow it (no filter failure)
-                                else:
-                                    filter_failures.append(f"Market Cap ${market_cap:.1f}M > $600M (Score {proprietary_score:.0f} ≤ 90)")
-                                    market_cap_tier = 'TOO_LARGE'
-                                    market_cap_filter_passed = False  # FAIL filter - will skip
-                        elif market_cap is None:
-                            # V7.5: If market cap unavailable, still allow but log warning
-                            # (Some juniors may not have market cap data - don't exclude them)
+                            if market_cap < 20:
+                                market_cap_tier = 'MICRO'
+                            elif market_cap <= 600:
+                                market_cap_tier = 'JUNIOR_MIDTIER'
+                            elif market_cap <= 5000:
+                                market_cap_tier = 'MID_CAP'
+                            else:
+                                market_cap_tier = 'LARGE_CAP'
+                            market_cap_filter_passed = True
+                        else:
                             market_cap_tier = 'UNKNOWN'
-                            market_cap_filter_passed = True  # Allow through if data unavailable
-                            _log(f"{symbol} market cap unavailable (allowing through)")
+                            market_cap_filter_passed = True
                         
                         # V7.5: Explicitly DO NOT filter based on Revenue or P/E
                         # Juniors with 0 revenue or negative P/E are investing in exploration - this is expected
@@ -5143,19 +5096,10 @@ if 'results' in st.session_state:
                         risk_score = float(row_dict.get('Sell_Risk_Score', 50))
                         
                         # Calculate combined score: (Alpha + FA Score) / Risk
+                        # No ticker-specific bonuses — ranking is purely data-driven
                         alpha_score = float(row_dict.get('Alpha_Score', 50))
-                        # V7.0: Uranium Surge – +15 Regime Alpha for NXE, CCJ, URR (2026 structural supply deficit)
-                        if symbol in ("NXE", "CCJ", "URR"):
-                            alpha_score = min(100.0, alpha_score + 15.0)
-                        
-                        # V7.5: Prioritization Bonus for Junior/Mid-Tier stocks ($20M-$600M)
-                        # This ensures they rank higher in Global Search results
                         prioritization_bonus = 0.0
-                        if market_cap_tier == 'JUNIOR_MIDTIER':
-                            prioritization_bonus = 10.0  # +10 bonus to combined score for sweet spot
-                            alpha_score = min(100.0, alpha_score + 5.0)  # Also boost alpha slightly
-                        
-                        combined_score = (alpha_score + fa_score) / max(risk_score, 1) + prioritization_bonus
+                        combined_score = (alpha_score + fa_score) / max(risk_score, 1)
                         
                         # V5.0: Global Search - bypass all diversification/impact gates
                         div_veto_applied = False
@@ -5237,72 +5181,11 @@ if 'results' in st.session_state:
                 else:
                     status_text.warning(f"0/{len(symbols_to_scan)} symbols loaded — check hey.env for TIINGO_API_KEY")
                 
-                # Convert to DataFrame and sort by V7.5: Prioritize Junior/Mid-Tier + 15-Year Sharpe + Shanghai Premium
+                # Convert to DataFrame and sort by Combined_Score
                 rec_df = pd.DataFrame(recommendations_data)
                 if not rec_df.empty:
-                    # V7.5: Global Mining Crawler - Rank with Junior/Mid-Tier prioritization
-                    def _sector_rank_score(row):
-                        # V7.5: PRIORITY 1 - Junior/Mid-Tier stocks ($20M-$600M) get highest base score
-                        market_cap_tier = row.get('Market_Cap_Tier', '')
-                        base_priority = 0
-                        if market_cap_tier == 'JUNIOR_MIDTIER':
-                            base_priority = 10000  # Highest priority - sweet spot
-                        elif market_cap_tier == 'HIGH_QUALITY_EXCEPTION':
-                            base_priority = 5000   # High quality exception (Score > 90)
-                        else:
-                            base_priority = 0      # Lower priority for others
-                        metal = str(row.get('Metal_Type', row.get('metal', ''))).strip()
-                        metal_priority = 0
-                        # Prioritize Uranium, Gold, Silver equally
-                        if metal in ('Uranium', 'Gold', 'Silver'):
-                            metal_priority = 1000  # High priority base
-                        
-                        priority = base_priority + metal_priority
-                        
-                        # V7.3: Use 15-year Sharpe if available, otherwise fall back to 1-year
-                        sharpe_15y = row.get('Sharpe_15y', np.nan)
-                        sharpe_1y = row.get('Sharpe_1y', np.nan)
-                        sharpe = sharpe_15y if np.isfinite(sharpe_15y) else sharpe_1y
-                        sharpe_score = sharpe if np.isfinite(sharpe) else 0
-                        
-                        # V7.4: Shanghai Premium exposure bonus with Physical Scarcity
-                        symbol_upper = str(row.get('Symbol', '')).upper()
-                        shanghai_bonus = 1.0
-                        # High Shanghai Premium exposure stocks
-                        shanghai_stocks = ['MAG', 'PAAS', 'AG', 'EXK', 'HL', 'SIL', 'SILJ', 'GOLD', 'NEM', 'AEM', 'FNV']
-                        
-                        # V7.4: Check if Physical Scarcity is active (Shanghai Premium > 3%)
-                        physical_scarcity_active = st.session_state.get('physical_scarcity_active', False)
-                        if physical_scarcity_active and symbol_upper in ['MAG', 'PAAS']:
-                            shanghai_bonus = 1.25  # V7.4: Physical Scarcity bonus (+25% for MAG, PAAS)
-                        elif symbol_upper in shanghai_stocks:
-                            shanghai_bonus = 1.15  # 15% bonus for high Shanghai exposure
-                        elif metal in ('Gold', 'Silver'):
-                            shanghai_bonus = 1.05  # 5% bonus for Gold/Silver miners
-                        
-                        sharpe_score = (sharpe * 10) if np.isfinite(sharpe) and sharpe > 0 else 0.0  # Scale Sharpe
-                        shanghai_nav = row.get('Shanghai_NAV', np.nan)
-                        # V7.4: Fix isfinite error - ensure shanghai_nav is numeric
-                        try:
-                            shanghai_nav = float(shanghai_nav) if shanghai_nav is not None and shanghai_nav != '' else np.nan
-                        except (ValueError, TypeError):
-                            shanghai_nav = np.nan
-                        nav_score = (100.0 / shanghai_nav) if np.isfinite(shanghai_nav) and shanghai_nav > 0 else 0.0  # Lower P/NAV = better
-                        
-                        # V7.3: Composite = (Sharpe + NAV) * Shanghai Premium bonus
-                        composite = (sharpe_score + nav_score) * shanghai_bonus
-                        return priority + composite
-                    
-                    rec_df['Sector_Rank'] = rec_df.apply(_sector_rank_score, axis=1)
-                    # V7.5: CRITICAL - Sort by Sector_Rank (Junior/Mid-Tier priority) first, then Combined_Score
-                    # This ensures Junior/Mid-Tier stocks appear at the top
-                    rec_df = rec_df.sort_values(['Sector_Rank', 'Combined_Score'], ascending=[False, False])
-                    
-                    # V7.5: Log prioritization summary
-                    junior_count = len(rec_df[rec_df.get('Market_Cap_Tier', '') == 'JUNIOR_MIDTIER'])
-                    high_quality_count = len(rec_df[rec_df.get('Market_Cap_Tier', '') == 'HIGH_QUALITY_EXCEPTION'])
-                    if junior_count > 0 or high_quality_count > 0:
-                        _log(f"Prioritization: {junior_count} Junior/Mid-Tier, {high_quality_count} High Quality Exceptions")
+                    # Rank purely by Combined_Score = (Alpha + FA) / Risk
+                    rec_df = rec_df.sort_values('Combined_Score', ascending=False)
                     
                     # V5.0: Global Search - explicitly clear gates for all candidates
                     if global_opportunity_scan:
@@ -5357,11 +5240,11 @@ if 'results' in st.session_state:
                 
                 if SECTOR_CRAWLER_AVAILABLE:
                     hunting_settings = load_hunting_settings()
-                    max_price = hunting_settings.get('max_stock_price', UI_CONFIG.get('max_price', 5.00))
-                    max_mcap = hunting_settings.get('max_market_cap_millions', UI_CONFIG.get('max_mcap_millions', 500.0))
+                    max_price = hunting_settings.get('max_stock_price', UI_CONFIG.get('max_price', 200.0))
+                    max_mcap = hunting_settings.get('max_market_cap_millions', UI_CONFIG.get('max_mcap_millions', 80000))
                 else:
-                    max_price = UI_CONFIG.get('max_price', 5.00)
-                    max_mcap = UI_CONFIG.get('max_mcap_millions', 500.0)
+                    max_price = UI_CONFIG.get('max_price', 200.0)
+                    max_mcap = UI_CONFIG.get('max_mcap_millions', 80000)
                 
                 for idx, row in df.iterrows():
                     symbol = row['Symbol']
@@ -5596,24 +5479,10 @@ if 'results' in st.session_state:
                 actionable = actionable[actionable['Passes_Impact_Gate']].copy()
             filtered_by_impact = before_impact_filter - len(actionable) if not global_opportunity_scan else 0
 
-            # V7.5: CRITICAL - Prioritize Junior/Mid-Tier stocks in Top 5
-            # Sort actionable by Market_Cap_Tier first (Junior/Mid-Tier at top), then Combined_Score
-            if not actionable.empty and 'Market_Cap_Tier' in actionable.columns:
-                # Create priority order: JUNIOR_MIDTIER > HIGH_QUALITY_EXCEPTION > others
-                tier_order = {'JUNIOR_MIDTIER': 1, 'HIGH_QUALITY_EXCEPTION': 2, 'UNKNOWN': 3, 'TOO_SMALL': 4, 'TOO_LARGE': 5}
-                actionable['_tier_priority'] = actionable['Market_Cap_Tier'].map(tier_order).fillna(99)
-                actionable = actionable.sort_values(['_tier_priority', 'Combined_Score'], ascending=[True, False])
-                actionable = actionable.drop(columns=['_tier_priority'], errors='ignore')
-            
+            # Sort purely by Combined_Score — best algo score wins regardless of market cap
+            if not actionable.empty:
+                actionable = actionable.sort_values('Combined_Score', ascending=False)
             top_5 = actionable.head(5)
-            
-            # V7.5: Log which stocks made it to Top 5 and their market cap tiers
-            if not top_5.empty and 'Market_Cap_Tier' in top_5.columns:
-                junior_in_top5 = len(top_5[top_5['Market_Cap_Tier'] == 'JUNIOR_MIDTIER'])
-                if junior_in_top5 > 0:
-                    _log(f"Top 5 includes {junior_in_top5} Junior/Mid-Tier stock(s)")
-                else:
-                    _log(f"Top 5 contains 0 Junior/Mid-Tier stocks — may need broader scan")
         else:
             top_5 = pd.DataFrame()
             filtered_by_action = 0
@@ -5650,8 +5519,8 @@ if 'results' in st.session_state:
                 aisc_filtered = 0
             
             # Use UI_CONFIG to prevent NameError
-            max_price_val = UI_CONFIG.get('max_price', 5.00)
-            max_mcap_val = UI_CONFIG.get('max_mcap_millions', 500.0)
+            max_price_val = UI_CONFIG.get('max_price', 200.0)
+            max_mcap_val = UI_CONFIG.get('max_mcap_millions', 80000)
             max_aisc_val = UI_CONFIG.get('max_aisc', 1400)
             
             if price_filtered > 0:
