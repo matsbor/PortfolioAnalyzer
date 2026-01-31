@@ -305,68 +305,68 @@ UI_CONFIG = {
     'max_mcap_millions': 500.0
 }
 
-# V5.0: Professional Header with Dark-Mode Institutional Feel
+# Clean professional header
 st.markdown("""
 <style>
     .alpha-miner-header {
-        text-align: center;
-        padding: 1.5rem 0;
-        border-bottom: 3px solid #1e40af;
-        margin-bottom: 2rem;
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-        border-radius: 8px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        text-align: left;
+        padding: 1rem 1.5rem;
+        border-bottom: 2px solid #334155;
+        margin-bottom: 1.5rem;
+        background: #0f172a;
+        border-radius: 6px;
     }
     .alpha-miner-header h1 {
         margin: 0;
-        color: #60a5fa;
-        font-size: 2.8rem;
-        font-weight: 800;
-        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
-        letter-spacing: -0.02em;
+        color: #f1f5f9;
+        font-size: 1.8rem;
+        font-weight: 700;
+        letter-spacing: -0.01em;
     }
     .alpha-miner-header p {
-        margin: 0.5rem 0 0 0;
-        color: #cbd5e1;
-        font-size: 1.2rem;
+        margin: 0.3rem 0 0 0;
+        color: #94a3b8;
+        font-size: 0.95rem;
         font-weight: 400;
-        letter-spacing: 0.05em;
     }
 </style>
 <div class="alpha-miner-header">
     <h1>Alpha Miner Pro</h1>
-    <p>Institutional Portfolio Manager</p>
+    <p>Mining Portfolio Analysis &amp; Discovery Engine</p>
 </div>
 """, unsafe_allow_html=True)
 
-# Professional styling
+# Professional styling — minimal, functional
 st.markdown("""
 <style>
-    .stApp {background-color: #0a0e1a; color: #e8eaf0;}
-    .main {background-color: #0a0e1a;}
-    h1, h2, h3 {color: #e8eaf0 !important;}
-    
-    /* Badges */
-    .badge-core {background: #2563eb; color: white; padding: 0.25rem 0.75rem; border-radius: 12px; font-weight: bold; font-size: 0.85rem; margin: 0 0.25rem;}
-    .badge-tactical {background: #f59e0b; color: white; padding: 0.25rem 0.75rem; border-radius: 12px; font-weight: bold; font-size: 0.85rem; margin: 0 0.25rem;}
-    .badge-gambling {background: #ef4444; color: white; padding: 0.25rem 0.75rem; border-radius: 12px; font-weight: bold; font-size: 0.85rem; margin: 0 0.25rem;}
-    .badge-l0 {background: #dc2626; color: white; padding: 0.25rem 0.75rem; border-radius: 12px; font-weight: bold; font-size: 0.85rem; margin: 0 0.25rem;}
-    .badge-l1 {background: #f59e0b; color: white; padding: 0.25rem 0.75rem; border-radius: 12px; font-weight: bold; font-size: 0.85rem; margin: 0 0.25rem;}
-    .badge-l2 {background: #3b82f6; color: white; padding: 0.25rem 0.75rem; border-radius: 12px; font-weight: bold; font-size: 0.85rem; margin: 0 0.25rem;}
-    .badge-l3 {background: #10b981; color: white; padding: 0.25rem 0.75rem; border-radius: 12px; font-weight: bold; font-size: 0.85rem; margin: 0 0.25rem;}
-    .badge-insider {background: #8b5cf6; color: white; padding: 0.25rem 0.75rem; border-radius: 12px; font-weight: bold; font-size: 0.85rem; margin: 0 0.25rem;}
-    .badge-discovery {background: #ec4899; color: white; padding: 0.25rem 0.75rem; border-radius: 12px; font-weight: bold; font-size: 0.85rem; margin: 0 0.25rem;}
-    
-    /* Command Center */
-    .command-center {background: #1e293b; border: 2px solid #475569; padding: 2rem; border-radius: 15px; margin: 1.5rem 0;}
-    .risk-card {background: #7f1d1d; border-left: 5px solid #dc2626; padding: 1.5rem; margin: 0.5rem 0; border-radius: 8px;}
-    .opportunity-card {background: #14532d; border-left: 5px solid #16a34a; padding: 1.5rem; margin: 0.5rem 0; border-radius: 8px;}
-    .warning-banner {background: #7c2d12; border: 3px solid #ea580c; padding: 1.5rem; border-radius: 10px; margin: 1rem 0; text-align: center;}
-    .safe-banner {background: #065f46; border: 3px solid #10b981; padding: 1.5rem; border-radius: 10px; margin: 1rem 0; text-align: center;}
-    
-    /* Gate status */
-    .gate-pass {color: #10b981; font-weight: bold;}
-    .gate-fail {color: #ef4444; font-weight: bold;}
+    .stApp {background-color: #0f1117; color: #e2e8f0;}
+    .main {background-color: #0f1117;}
+    h1, h2, h3 {color: #e2e8f0 !important;}
+
+    /* Status bar */
+    .status-bar {display: flex; gap: 1.5rem; padding: 0.6rem 1rem; background: #1e293b; border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem; color: #94a3b8;}
+    .status-bar .ok {color: #22c55e;}
+    .status-bar .warn {color: #eab308;}
+    .status-bar .fail {color: #ef4444;}
+
+    /* Badges — compact, functional */
+    .badge-core, .badge-tactical, .badge-gambling, .badge-l0, .badge-l1, .badge-l2, .badge-l3, .badge-insider, .badge-discovery {
+        color: white; padding: 0.15rem 0.5rem; border-radius: 4px; font-weight: 600; font-size: 0.8rem; margin: 0 0.15rem; display: inline-block;
+    }
+    .badge-core {background: #2563eb;} .badge-tactical {background: #d97706;} .badge-gambling {background: #dc2626;}
+    .badge-l0 {background: #dc2626;} .badge-l1 {background: #d97706;} .badge-l2 {background: #2563eb;} .badge-l3 {background: #16a34a;}
+    .badge-insider {background: #7c3aed;} .badge-discovery {background: #db2777;}
+
+    /* Cards */
+    .command-center {background: #1e293b; border: 1px solid #334155; padding: 1.5rem; border-radius: 8px; margin: 1rem 0;}
+    .risk-card {background: #450a0a; border-left: 3px solid #dc2626; padding: 1rem; margin: 0.4rem 0; border-radius: 4px;}
+    .opportunity-card {background: #052e16; border-left: 3px solid #16a34a; padding: 1rem; margin: 0.4rem 0; border-radius: 4px;}
+    .warning-banner {background: #431407; border: 2px solid #ea580c; padding: 1rem; border-radius: 6px; margin: 0.8rem 0; text-align: center;}
+    .safe-banner {background: #052e16; border: 2px solid #16a34a; padding: 1rem; border-radius: 6px; margin: 0.8rem 0; text-align: center;}
+
+    /* Gates */
+    .gate-pass {color: #22c55e; font-weight: 600;}
+    .gate-fail {color: #ef4444; font-weight: 600;}
     .gate-warning {color: #f59e0b; font-weight: bold;}
 </style>
 """, unsafe_allow_html=True)
@@ -2039,7 +2039,7 @@ def calculate_sovereign_rebalance_weights(
 def render_morning_tape_simple(gold_analysis, silver_analysis, metal_regime):
     """Simple morning tape renderer"""
     st.markdown("---")
-    st.header("📊 METAL OUTLOOK")
+    st.header("METAL OUTLOOK")
     
     col1, col2 = st.columns(2)
     
@@ -2058,7 +2058,7 @@ def render_morning_tape_simple(gold_analysis, silver_analysis, metal_regime):
         st.caption(silver_analysis.get('explanation', ''))
     
     # Portfolio guidance
-    st.markdown("### 📋 Portfolio Guidance")
+    st.markdown("### Portfolio Guidance")
     posture = metal_regime.get('regime', 'NEUTRAL')
     
     if 'BEARISH' in posture:
@@ -2118,7 +2118,7 @@ with st.sidebar:
                     st.caption(f"... and {len(alerts) - 10} more alerts")
 
     # V7.4: "Black Box" Diagnostic Tracker at top of sidebar
-    st.markdown("### 🔍 Black Box Diagnostic")
+    st.markdown("### Black Box Diagnostic")
     with st.expander("🔬 System Diagnostics", expanded=False):
         # Show current working directory
         cwd = os.getcwd()
@@ -2157,7 +2157,7 @@ with st.sidebar:
     
     # V5.0: Action Sidebar - Rebalance Status at top
     st.markdown("---")
-    st.markdown("### ⚖️ Action Status")
+    st.markdown("### Action Status")
     if 'results' in st.session_state:
         results_df = st.session_state.results
         total_mv = np.float64(results_df['Market_Value'].sum())
@@ -2210,7 +2210,7 @@ with st.sidebar:
     
     # V7.3: Shanghai Arbitrage Premium Display
     st.markdown("---")
-    st.markdown("### 🏛️ Shanghai Arbitrage Premium")
+    st.markdown("### Shanghai Arbitrage Premium")
     benchmarks = get_global_commodity_benchmarks()
     live_prices = get_sovereign_spot_prices()
     
@@ -2247,7 +2247,7 @@ with st.sidebar:
         shanghai_physical_premium_pct = benchmarks.get('shanghai_physical_premium_pct', np.nan)
         if np.isfinite(shanghai_physical_price) and np.isfinite(silver_comx):
             st.markdown("---")
-            st.markdown("### 💔 Great Divorce")
+            st.markdown("### Great Divorce")
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("🇺🇸 US Close", f"${silver_comx:.2f}")
@@ -2264,7 +2264,7 @@ with st.sidebar:
     
     # V7.3: Energy Regime (Uranium)
     st.markdown("---")
-    st.markdown("### ⚡ Energy Regime")
+    st.markdown("### Energy Regime")
     uranium_spot = benchmarks.get('uranium_spot', np.nan)
     if np.isfinite(uranium_spot):
         st.metric("☢️ Uranium Spot", f"${uranium_spot:.2f}/lb", 
@@ -2288,7 +2288,7 @@ with st.sidebar:
     
 
 
-    st.markdown("### 🧭 Risk Governance")
+    st.markdown("### Risk Governance")
     st.session_state.strict_mode = st.toggle("STRICT MODE (downgrade on low confidence)", value=bool(st.session_state.get('strict_mode', True)))
 
     # Risk profile presets
@@ -2303,7 +2303,7 @@ with st.sidebar:
     with st.expander("Show preset parameters"):
         st.table(pd.DataFrame([preset]))
 
-    st.markdown("### ♻️ Replay Mode (Offline)")
+    st.markdown("### Replay Mode (Offline)")
     replay_mode = st.toggle("Replay from Evidence Pack (no network calls)", value=bool(st.session_state.get('replay_mode', False)))
     st.session_state.replay_mode = replay_mode
 
@@ -2331,7 +2331,7 @@ with st.sidebar:
 
     st.markdown("---")
     
-    st.markdown("### ⚙️ Determinism / Run Settings")
+    st.markdown("### Determinism / Run Settings")
     
     # Initialize settings if not present
     if 'freeze_time' not in st.session_state:
@@ -2365,7 +2365,7 @@ with st.sidebar:
     st.markdown("---")
     
     # V4.0 Phase 3: Fund Health Metrics
-    st.markdown("### 📊 Fund Health")
+    st.markdown("### Fund Health")
     
     # Execution Efficiency (from backtest if available, or show placeholder)
     execution_efficiency = st.session_state.get('execution_efficiency', None)
@@ -2397,7 +2397,7 @@ with st.sidebar:
     st.markdown("---")
     
     # V5.0: Sector Watchlist (Top 10 from master_discovery_list.csv by Alpha Score)
-    st.markdown("### 👁️ Sector Watchlist")
+    st.markdown("### Sector Watchlist")
     if load_master_discovery_list is not None:
         try:
             master_symbols = load_master_discovery_list(max_symbols=200)
@@ -2605,7 +2605,7 @@ with st.sidebar:
     # V7.2: Use total_portfolio_value from UI (no hardcoding)
     # V7.3: Use live prices when available (>1% difference from EOD)
     st.markdown("---")
-    st.markdown("### 🔥 Hard-Burn Stress Test")
+    st.markdown("### Hard-Burn Stress Test")
     if "results" in st.session_state and TIINGO_AVAILABLE and TiingoClient is not None and (os.getenv("TIINGO_API_KEY") or "").strip():
         results_df = st.session_state.results
         # V7.3: Use total_portfolio_value from UI (no hardcoded fallback)
@@ -2701,7 +2701,7 @@ with st.sidebar:
     st.markdown("---")
     
     # V5.0: Backtest Verification Module
-    st.markdown("### 📊 Verification")
+    st.markdown("### Verification")
     if st.button("📊 Run Verification Backtest", use_container_width=True, disabled=not st.session_state.get('audit_passed', False)):
         with st.spinner("Running 12-month verification backtest..."):
             try:
@@ -2829,7 +2829,7 @@ with st.sidebar:
     st.markdown("---")
     
     # Watchlist feature
-    st.markdown("### 📋 Watchlist")
+    st.markdown("### Watchlist")
     WATCHLIST_FILE = Path.home() / '.alpha_miner_watchlist.json'
     
     # Initialize watchlist in session state
@@ -2880,7 +2880,7 @@ with st.sidebar:
     
     st.markdown("---")
 
-    st.header("📊 Portfolio")
+    st.header("Portfolio")
     # V7.3: Dynamic Scaling - Use total_portfolio_value from UI (no hardcoding)
     # Note: key="total_portfolio_value" automatically stores in st.session_state
     # DO NOT manually set st.session_state.total_portfolio_value - causes session state exception
@@ -2907,12 +2907,12 @@ with st.sidebar:
     )
     st.session_state.portfolio = edited
     
-    st.markdown("### 💰 Cash")
+    st.markdown("### Cash")
     cash = st.number_input("Available", value=float(st.session_state.cash), step=1000.0, label_visibility="collapsed")
     st.session_state.cash = cash
     
     st.markdown("---")
-    st.markdown("### 📊 Display Options")
+    st.markdown("### Display Options")
     sort_mode = st.selectbox(
         "Sort by",
         ["Action first (default)", "Sell risk first", "Alpha first"]
@@ -2927,393 +2927,53 @@ with st.sidebar:
 # MAIN APP
 # ============================================================================
 
-st.title("💎 ALPHA MINER PRO")
-st.caption("World-Class Capital Allocation Engine • Survival > Alpha • Sell-In-Time Focus")
+# ── Quality Status Bar ──────────────────────────────────────────────────────
+# Shows system health at a glance: API, portfolio, data freshness
+_tiingo_ok = not _TIINGO_KEY_MISSING
+_yf_ok = YFINANCE_AVAILABLE if 'YFINANCE_AVAILABLE' in dir() else True
+_portfolio_loaded = len(st.session_state.get('portfolio', [])) > 0
+_last_analysis = st.session_state.get('last_analysis_utc', None)
+_data_age_str = "No data yet"
+if _last_analysis:
+    _age_min = (datetime.datetime.now(datetime.timezone.utc) - _last_analysis).total_seconds() / 60
+    _data_age_str = f"{_age_min:.0f}m ago" if _age_min < 60 else f"{_age_min / 60:.1f}h ago"
 
-# Trust Panel (no expander)
-st.markdown("---")
-st.markdown("### 🔒 Trust Panel")
-trust_col1, trust_col2, trust_col3, trust_col4, trust_col5, trust_col6 = st.columns(6)
-
-run_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-trust_col1.caption(f"**Run:** {run_timestamp[:19]}Z")
-
-replay_status = "ON" if st.session_state.get('replay_mode', False) else "OFF"
-trust_col2.caption(f"**Replay:** {replay_status}")
-
-strict_status = "ON" if st.session_state.get('strict_mode', False) else "OFF"
-trust_col3.caption(f"**Strict Mode:** {strict_status}")
-
-risk_profile = st.session_state.get('risk_profile', 'Balanced')
-trust_col4.caption(f"**Risk Profile:** {risk_profile}")
-
-# Validation status
-validation = st.session_state.get('validation', {})
-if validation:
-    val_ok = validation.get('ok', False)
-    val_warnings = len(validation.get('warnings', []))
-    val_errors = len(validation.get('errors', []))
-    if val_ok and val_warnings == 0:
-        trust_col5.caption(f"**Validation:** ✅ PASS")
-    elif val_ok:
-        trust_col5.caption(f"**Validation:** ⚠️ PASS ({val_warnings} warnings)")
-    else:
-        trust_col5.caption(f"**Validation:** ❌ FAIL ({val_errors} errors)")
-else:
-    trust_col5.caption("**Validation:** ⏳ Pending")
-
-# Evidence pack ID
-evidence_pack = st.session_state.get('evidence_pack')
-if evidence_pack:
-    ep_id = evidence_pack.get('evidence_pack_id', 'Unknown')
-    trust_col6.caption(f"**Evidence Pack:** {ep_id[:20]}...")
-else:
-    trust_col6.caption("**Evidence Pack:** None")
-
-# Network calls indicator
-network_calls_made = "NO" if st.session_state.get('replay_mode', False) else "YES"
-st.caption(f"**Network calls made:** {network_calls_made}")
+st.markdown(f"""<div class="status-bar">
+    <span>Tiingo: <span class="{'ok' if _tiingo_ok else 'fail'}">{'Connected' if _tiingo_ok else 'No API Key'}</span></span>
+    <span>Yahoo: <span class="{'ok' if _yf_ok else 'warn'}">{'Available' if _yf_ok else 'Unavailable'}</span></span>
+    <span>Portfolio: <span class="{'ok' if _portfolio_loaded else 'warn'}">{len(st.session_state.get('portfolio', []))} positions</span></span>
+    <span>Data: <span class="{'ok' if _last_analysis else 'warn'}">{_data_age_str}</span></span>
+    <span>Risk: {st.session_state.get('risk_profile', 'Balanced')}</span>
+    <span>Mode: {'Replay' if st.session_state.get('replay_mode', False) else 'Live'}</span>
+</div>""", unsafe_allow_html=True)
 
 st.markdown("---")
 
 # Get macro regime
 macro_regime = calculate_macro_regime()
 
-# Display macro banner
-if macro_regime['regime'] == 'DEFENSIVE':
-    st.markdown(f"""
-    <div class="warning-banner">
-        <h2>⚠️ DEFENSIVE MODE - NO NEW BUYS</h2>
-        <p>{' | '.join(macro_regime['factors'])}</p>
-        <p><strong>DXY:</strong> {macro_regime.get('dxy', 'N/A')} | <strong>VIX:</strong> {macro_regime.get('vix', 'N/A')}</p>
-    </div>
-    """, unsafe_allow_html=True)
-elif macro_regime['regime'] == 'RISK-ON':
-    st.markdown(f"""
-    <div class="safe-banner">
-        <h2>✅ RISK-ON MODE - GREEN LIGHT</h2>
-        <p>{' | '.join(macro_regime['factors'])}</p>
-    </div>
-    """, unsafe_allow_html=True)
+# Macro regime — compact inline display
+_regime = macro_regime['regime']
+_factors_str = ' | '.join(macro_regime['factors'])
+if _regime == 'DEFENSIVE':
+    st.markdown(f'<div class="warning-banner"><strong>DEFENSIVE</strong> — New buys paused | {_factors_str}</div>', unsafe_allow_html=True)
+elif _regime == 'RISK-ON':
+    st.markdown(f'<div class="safe-banner"><strong>RISK-ON</strong> — Full deployment | {_factors_str}</div>', unsafe_allow_html=True)
+elif _regime == 'CAUTIOUS':
+    st.warning(f"**CAUTIOUS** — Reduced sizing | {_factors_str}")
 else:
-    st.info(f"📊 **NEUTRAL MODE** • {' | '.join(macro_regime['factors'])}")
+    st.info(f"**NEUTRAL** — {_factors_str}")
 
-# Display Tape/Regime Gate
+# Tape gate — compact
 if 'tape_gate' in st.session_state:
     tape_gate = st.session_state.tape_gate
-    st.markdown("### 🚦 Tape / Regime Gate")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        dxy_reason = next((r for r in tape_gate['reasons'] if 'DXY' in r), 'DXY: Unknown')
-        st.caption(f"**{dxy_reason}**")
-    with col2:
-        vix_reason = next((r for r in tape_gate['reasons'] if 'VIX' in r), 'VIX: Unknown')
-        st.caption(f"**{vix_reason}**")
-    with col3:
-        buys_status = "✅ Yes" if tape_gate['new_buys_allowed'] else "❌ No"
-        st.caption(f"**New buys allowed? {buys_status}**")
-    if tape_gate['throttle'] < 1.0:
-        st.warning(f"⚠️ Throttle factor: {tape_gate['throttle']:.2f} (reduced position sizing)")
+    _buys = "Allowed" if tape_gate['new_buys_allowed'] else "Blocked"
+    _throttle = f" | Throttle: {tape_gate['throttle']:.0%}" if tape_gate['throttle'] < 1.0 else ""
+    st.caption(f"**Tape Gate:** New buys {_buys}{_throttle} | {' | '.join(tape_gate['reasons'][:3])}")
 
-# ============================================================================
-# MINING DISCOVERY SCANNER
-# ============================================================================
-if SCANNER_AVAILABLE:
-    st.markdown("---")
-    st.header("🔍 Mining Discovery Scanner")
-    st.caption("Scan TSX-V miners and other symbols to identify top discovery candidates ranked by Alpha Score")
-    
-    scanner_tab1, scanner_tab2 = st.tabs(["📊 Scanner", "📁 Upload CSV"])
-    
-    with scanner_tab1:
-        # Manual symbol input
-        symbols_input = st.text_area(
-            "Enter symbols (comma-separated)",
-            placeholder="e.g., BORMF, LUCMF, ABRA, etc.",
-            height=100
-        )
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            # V5.0: Use UI_CONFIG for default min_alpha
-            min_alpha = st.number_input("Minimum Alpha Score", min_value=0.0, max_value=100.0, value=float(UI_CONFIG.get('min_alpha', 40.0)), step=5.0)
-        with col2:
-            max_results = st.number_input("Max Results", min_value=1, max_value=20, value=5, step=1)
-        
-        if st.button("🔍 Scan Symbols", type="primary", use_container_width=True):
-            if symbols_input:
-                symbols = [s.strip().upper() for s in symbols_input.split(',') if s.strip()]
-                if symbols:
-                    with st.spinner(f"Scanning {len(symbols)} symbols..."):
-                        try:
-                            scanner_results = scan_symbols(
-                                symbols=symbols,
-                                data_dir=Path('./.scanner_cache'),
-                                macro_regime=macro_regime,
-                                min_alpha_score=min_alpha,
-                                max_results=max_results
-                            )
-                            
-                            if not scanner_results.empty:
-                                st.session_state.scanner_results = scanner_results
-                                st.success(f"✅ Found {len(scanner_results)} discovery candidates")
-                            else:
-                                st.warning("No candidates found matching criteria")
-                                st.session_state.scanner_results = pd.DataFrame()
-                        except Exception as e:
-                            st.error(f"Scanner error: {type(e).__name__}: {str(e)}")
-                            import traceback
-                            with st.expander("Technical details", expanded=False):
-                                st.code(traceback.format_exc(), language='python')
-                else:
-                    st.warning("Please enter at least one symbol")
-            else:
-                st.warning("Please enter symbols to scan")
-        
-        # Display scanner results
-        if 'scanner_results' in st.session_state and not st.session_state.scanner_results.empty:
-            st.markdown("### 🎯 Top Discovery Candidates")
-            results_df = st.session_state.scanner_results.copy()
-            
-            # Highlight top candidates
-            st.dataframe(
-                results_df.style.format({
-                    'Alpha_Score': '{:.1f}',
-                    'Survival_Score': '{:.0f}',
-                    'Return_7d': '{:.1f}%',
-                    'Return_30d': '{:.1f}%',
-                    'Volatility_60d': '{:.1f}%',
-                    'Price': '${:.2f}',
-                    'MA50': '${:.2f}',
-                    'MA200': '${:.2f}'
-                }).background_gradient(subset=['Alpha_Score'], cmap='RdYlGn'),
-                use_container_width=True,
-                hide_index=True
-            )
-            
-            # Show macro regime filter status
-            if macro_regime.get('regime') == 'DEFENSIVE':
-                st.info("🔒 **DEFENSIVE Mode Active**: Only showing Producers with high Survival scores (≥60)")
-            else:
-                st.caption(f"📊 **{macro_regime.get('regime', 'NEUTRAL')} Mode**: Showing all discovery candidates")
-    
-    with scanner_tab2:
-        # CSV upload
-        uploaded_file = st.file_uploader("Upload CSV with symbols", type=['csv'])
-        
-        if uploaded_file is not None:
-            try:
-                # Read CSV from uploaded file (Streamlit file uploader returns BytesIO)
-                df_csv = pd.read_csv(uploaded_file)
-                # V5.0: Validate metadata (ensure Jurisdiction and Metal_Type exist)
-                df_csv = validate_metadata(df_csv)
-                if 'Symbol' in df_csv.columns:
-                    symbols_from_csv = df_csv['Symbol'].dropna().astype(str).str.strip().str.upper().tolist()
-                    st.success(f"✅ Loaded {len(symbols_from_csv)} symbols from CSV")
-                    st.text_area("Symbols loaded:", value=', '.join(symbols_from_csv[:20]) + (f" ... and {len(symbols_from_csv) - 20} more" if len(symbols_from_csv) > 20 else ""), height=100, disabled=True)
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        min_alpha_csv = st.number_input("Minimum Alpha Score", min_value=0.0, max_value=100.0, value=40.0, step=5.0, key='min_alpha_csv')
-                    with col2:
-                        max_results_csv = st.number_input("Max Results", min_value=1, max_value=20, value=5, step=1, key='max_results_csv')
-                    
-                    if st.button("🔍 Scan CSV Symbols", type="primary", use_container_width=True):
-                        with st.spinner(f"Scanning {len(symbols_from_csv)} symbols from CSV..."):
-                            try:
-                                scanner_results = scan_symbols(
-                                    symbols=symbols_from_csv,
-                                    data_dir=Path('./.scanner_cache'),
-                                    macro_regime=macro_regime,
-                                    min_alpha_score=min_alpha_csv,
-                                    max_results=max_results_csv
-                                )
-                                
-                                if not scanner_results.empty:
-                                    st.session_state.scanner_results = scanner_results
-                                    st.success(f"✅ Found {len(scanner_results)} discovery candidates")
-                                else:
-                                    st.warning("No candidates found matching criteria")
-                                    st.session_state.scanner_results = pd.DataFrame()
-                            except Exception as e:
-                                st.error(f"Scanner error: {type(e).__name__}: {str(e)}")
-                                import traceback
-                                with st.expander("Technical details", expanded=False):
-                                    st.code(traceback.format_exc(), language='python')
-                else:
-                    st.error(f"CSV file must have a 'Symbol' column. Found columns: {df_csv.columns.tolist()}")
-            except Exception as e:
-                st.error(f"Error loading CSV: {type(e).__name__}: {str(e)}")
-                import traceback
-                with st.expander("Technical details", expanded=False):
-                    st.code(traceback.format_exc(), language='python')
-        
-        # V4.0: Master Discovery List Scanner
-        st.markdown("---")
-        st.subheader("🚀 V4.0 Master Discovery List Scanner")
-        st.caption("Scan up to 200 symbols from master_discovery_list.csv (default: ./master_discovery_list.csv)")
-        
-        if load_master_discovery_list is not None:
-            col1, col2 = st.columns(2)
-            with col1:
-                min_alpha_master = st.number_input("Minimum Alpha Score", min_value=0.0, max_value=100.0, value=40.0, step=5.0, key='min_alpha_master')
-            with col2:
-                max_results_master = st.number_input("Max Results", min_value=1, max_value=50, value=10, step=1, key='max_results_master')
-            
-            if st.button("🚀 Scan Master List", type="primary", use_container_width=True):
-                with st.spinner("Loading master discovery list and scanning symbols..."):
-                    try:
-                        # Load symbols from master_discovery_list.csv
-                        master_symbols = load_master_discovery_list(max_symbols=200)
-                        
-                        if master_symbols:
-                            st.info(f"📋 Loaded {len(master_symbols)} symbols from master_discovery_list.csv")
-                            
-                            # Scan the symbols
-                            scanner_results = scan_symbols(
-                                symbols=master_symbols,
-                                data_dir=Path('./.scanner_cache'),
-                                macro_regime=macro_regime,
-                                min_alpha_score=min_alpha_master,
-                                max_results=max_results_master
-                            )
-                            
-                            if not scanner_results.empty:
-                                st.session_state.scanner_results = scanner_results
-                                st.success(f"✅ Found {len(scanner_results)} top discovery candidates from {len(master_symbols)} symbols scanned")
-                            else:
-                                st.warning("No candidates found matching criteria")
-                                st.session_state.scanner_results = pd.DataFrame()
-                        else:
-                            st.warning("No symbols found in master_discovery_list.csv")
-                    except FileNotFoundError as e:
-                        st.error(f"❌ Master discovery list not found: {str(e)}")
-                        st.info("💡 Create a CSV file named 'master_discovery_list.csv' in the project root with a 'Symbol' column")
-                    except Exception as e:
-                        st.error(f"Scanner error: {type(e).__name__}: {str(e)}")
-                        import traceback
-                        with st.expander("Technical details", expanded=False):
-                            st.code(traceback.format_exc(), language='python')
-        else:
-            st.warning("⚠️ Master discovery list scanner not available (alpha_miner_scanner module missing)")
-        
-        # Show help text if no file uploaded
-        if uploaded_file is None:
-            st.info("📁 Upload a CSV file with a 'Symbol' column to scan multiple symbols at once")
-            st.caption("Example CSV format:")
-            st.code("Symbol\nBORMF\nLUCMF\nABRA\n...", language='csv')
-
-# Quick Analysis for Watchlist
-if st.session_state.get('watchlist'):
-    st.markdown("---")
-    st.markdown("### 🔍 Quick Analysis (Watchlist)")
-    st.info("**Exploratory analysis — not a recommendation**")
-    
-    if st.button("🚀 Run Quick Analysis on Watchlist", type="secondary", use_container_width=True):
-        import traceback
-        try:
-            watchlist_symbols = st.session_state.get('watchlist', [])
-            if not watchlist_symbols:
-                st.warning("Watchlist is empty")
-            else:
-                quick_results = []
-                
-                # Get macro regime (needed for tape gate)
-                macro_regime = calculate_macro_regime()
-                
-                # Calculate tape gate
-                gold_analysis = st.session_state.get('gold_analysis')
-                silver_analysis = st.session_state.get('silver_analysis')
-                tape_gate = calculate_tape_gate(macro_regime, gold_analysis, silver_analysis)
-                
-                for symbol in watchlist_symbols:
-                    result = {
-                        'Symbol': symbol,
-                        'Financing_Overhang_Score': 0,
-                        'Financing_Overhang_Reasons': [],
-                        'Dilution_Risk_Score': 0,
-                        'Liquidity_Tier': 'Unknown',
-                        'Tape_Gate_Status': 'Unknown',
-                        'Catalyst_Detected': False
-                    }
-                    
-                    # Get news (skip network if replay mode)
-                    replay_mode = st.session_state.get('replay_mode', False)
-                    news_cache = st.session_state.get('news_cache', {})
-                    
-                    if replay_mode and news_cache:
-                        news = news_cache.get(symbol, [])
-                    else:
-                        if not replay_mode:
-                            if YFINANCE:
-                                news = get_news_for_ticker(symbol)
-                            else:
-                                news = []
-                        else:
-                            news = []
-                    
-                    # Calculate financing overhang
-                    overhang = calculate_financing_overhang(news, symbol, 12.0)
-                    result['Financing_Overhang_Score'] = overhang['score']
-                    result['Financing_Overhang_Reasons'] = overhang['reasons']
-                    
-                    # Calculate dilution risk (simplified - no full row data)
-                    runway_months = 12.0  # Default assumption
-                    dilution = calculate_dilution_risk(
-                        runway_months, 'Explorer', 0, news, True, True, False
-                    )
-                    result['Dilution_Risk_Score'] = dilution['score']
-                    
-                    # Get liquidity (simplified)
-                    if YFINANCE and not replay_mode:
-                        try:
-                            hist = yf.Ticker(symbol).history(period="1mo")
-                            if not hist.empty:
-                                price = hist['Close'].iloc[-1]
-                                volume = hist['Volume'].mean() if not hist.empty and 'Volume' in hist.columns else 0.0
-                                mv = price * volume * 20  # Approximate 20-day dollar volume
-                                # V7.3: Use total_portfolio_value from UI (no hardcoding)
-                                # V7.3: Get total_portfolio_value from UI (no hardcoded fallback)
-                                total_portfolio_value = st.session_state.get("total_portfolio_value", None)
-                                if total_portfolio_value is None or total_portfolio_value <= 0:
-                                    # Calculate from holdings if UI value not set
-                                    total_mv = np.float64(df['Market_Value'].sum()) if not df.empty else 0.0
-                                    total_portfolio_value = np.float64(total_mv + np.float64(st.session_state.cash))
-                                liq = calculate_liquidity_metrics(symbol, hist, price, mv, total_portfolio_value)
-                                result['Liquidity_Tier'] = liq.get('tier_code', 'L0')
-                        except Exception:
-                            result['Liquidity_Tier'] = 'Unknown'
-                    
-                    # Tape gate status
-                    result['Tape_Gate_Status'] = "New buys allowed" if tape_gate.get('new_buys_allowed', True) else "New buys blocked"
-                    
-                    # Catalyst detection (simplified - check financing events)
-                    if overhang['reasons']:
-                        catalyst_keywords = ['closed', 'atm', 'shelf', 'announced']
-                        if any(kw in str(r).lower() for r in overhang['reasons'] for kw in catalyst_keywords):
-                            result['Catalyst_Detected'] = True
-                    
-                    quick_results.append(result)
-                
-                # Store results
-                st.session_state.quick_analysis_results = quick_results
-                st.success(f"Quick analysis complete for {len(quick_results)} symbol(s)")
-                st.rerun()
-        
-        except Exception as e:
-            st.error(f"Quick analysis failed: {type(e).__name__}: {str(e)}")
-            with st.expander("Technical details", expanded=False):
-                st.code(traceback.format_exc(), language='python')
-    
-    # Display quick analysis results
-    if 'quick_analysis_results' in st.session_state:
-        results = st.session_state.quick_analysis_results
-        if results:
-            results_df = pd.DataFrame(results)
-            st.dataframe(results_df, use_container_width=True, hide_index=True)
-
+# ── PORTFOLIO ANALYSIS (Primary action — top of page) ──────────────────────
 # Analysis Button
-if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_width=True):
+if st.button("Run Portfolio Analysis", type="primary", use_container_width=True):
     import traceback
     
     try:
@@ -3322,7 +2982,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
         df = st.session_state.portfolio.copy()
         
         # V4.0 Phase 3: Automatically fetch GC=F and SI=F prices for GSR calculation
-        progress.progress(2, text="🪙 Fetching Gold/Silver prices for GSR...")
+        progress.progress(2, text="Fetching gold/silver prices...")
         gsr_data = fetch_gold_silver_prices()
         gsr_bias = None
         if gsr_data['success']:
@@ -3330,14 +2990,14 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
             st.session_state.gsr_data = gsr_data
             st.session_state.gsr_bias = gsr_bias
             if gsr_bias.get('silver_bonus', 0) > 0:
-                st.info(f"💰 GSR {gsr_bias['gs_ratio']:.1f} > 80: +{gsr_bias['silver_bonus']} Alpha Torque Bonus active for Silver symbols")
+                st.info(f"GSR {gsr_bias['gs_ratio']:.1f} > 80: +{gsr_bias['silver_bonus']} Alpha Torque Bonus active for Silver symbols")
         else:
             st.warning(f"⚠️ Could not fetch GSR data: {gsr_data.get('error', 'Unknown error')}")
             st.session_state.gsr_bias = None
         
         # Analyze metals FIRST
         if INSTITUTIONAL_V2_AVAILABLE or INSTITUTIONAL_V3_AVAILABLE:
-            progress.progress(3, text="🪙 Analyzing Gold & Silver cycles...")
+            progress.progress(3, text="Analyzing metal cycles...")
             
             if INSTITUTIONAL_V3_AVAILABLE:
                 gold_analysis = forecast_metal_direction("GC=F", "Gold")
@@ -3415,12 +3075,12 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
                 st.session_state.alpha_breakdown_storage = alpha_breakdown_storage
                 st.session_state.sell_triggers_storage = sell_triggers_storage
                 
-                progress.progress(100, text="✅ Replay complete!")
-                st.success("✅ World-class analysis complete!")
+                progress.progress(100, text="Replay complete")
+                st.success("Analysis complete.")
                 st.rerun()
         
         # Fetch price data (normal mode - network calls allowed)
-        progress.progress(10, text="📊 Fetching market data...")
+        progress.progress(10, text="Fetching market data...")
         
         # V7.3: Get live spot prices for gold/silver positions
         live_prices = get_sovereign_spot_prices() if not replay_mode else {}
@@ -3482,7 +3142,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
                     # Log error for debugging (if symbol available in context)
                     pass
         
-        progress.progress(25, text="🔍 Fetching fundamentals...")
+        progress.progress(25, text="Fetching fundamentals...")
         
         info_storage = {}
         inferred_storage = {}
@@ -3501,7 +3161,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
                 info_storage[row['Symbol']] = {}
                 inferred_storage[row['Symbol']] = {'metal_inferred': True, 'stage_inferred': True}
         
-        progress.progress(35, text="📰 Fetching news...")
+        progress.progress(35, text="Fetching news...")
         
         news_cache = {}
         for idx, row in df.iterrows():
@@ -3533,7 +3193,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
         df['Pct_Portfolio'] = ((df['Market_Value'].astype(np.float64) / float(total_portfolio_value)) * 100).astype(np.float64)  # vs TOTAL VALUE
         df['Runway'] = df['cash'] / df['burn']
         
-        progress.progress(45, text="🚦 Liquidity analysis...")
+        progress.progress(45, text="Liquidity analysis...")
         
         for idx, row in df.iterrows():
             hist = hist_cache.get(row['Symbol'], pd.DataFrame())
@@ -3542,7 +3202,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
             for k, v in liq.items():
                 df.at[idx, f'Liq_{k}'] = v
         
-        progress.progress(55, text="📊 Data confidence...")
+        progress.progress(55, text="Data confidence...")
         
         conf_breakdown_storage = {}
         
@@ -3557,7 +3217,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
             
             conf_breakdown_storage[row['Symbol']] = conf['breakdown']
         
-        progress.progress(60, text="💀 Dilution risk...")
+        progress.progress(60, text="Dilution risk...")
         
         dilution_factors_storage = {}
         
@@ -3583,7 +3243,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
             dilution_factors_storage[row['Symbol']] = dil['factors']
         
         # Calculate Financing Overhang
-        progress.progress(62, text="💰 Financing overhang analysis...")
+        progress.progress(62, text="Financing overhang...")
         
         for idx, row in df.iterrows():
             news = news_cache.get(row['Symbol'], [])
@@ -3595,7 +3255,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
             df.at[idx, 'Financing_Overhang_Reasons'] = overhang['reasons']
         
         # CRITICAL FIX: Calculate SMC BEFORE alpha scoring
-        progress.progress(65, text="📈 Calculating SMC signals...")
+        progress.progress(65, text="Calculating SMC signals...")
         
         smc_signals_storage = {}
         
@@ -3621,7 +3281,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
         # V8.0: Technical Analysis indicators
         ta_storage = {}
         if TA_MODULE_AVAILABLE:
-            progress.progress(67, text="📊 Technical analysis (RSI/MACD/Bollinger/OBV/ADX)...")
+            progress.progress(67, text="Technical analysis...")
             for idx, row in df.iterrows():
                 hist = hist_cache.get(row['Symbol'], pd.DataFrame())
                 if not hist.empty and len(hist) >= 20:
@@ -3649,7 +3309,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
 
         # V8.0: AISC scoring (if spot prices available)
         if AISC_TRACKER_AVAILABLE:
-            progress.progress(69, text="💰 AISC & margin analysis...")
+            progress.progress(69, text="AISC analysis...")
             spot = st.session_state.get('spot_prices', {})
             spot_gold = spot.get('gold_live', spot.get('gold_eod', 2650))
             spot_silver = spot.get('silver_live', spot.get('silver_eod', 31))
@@ -3665,7 +3325,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
                 df.at[idx, 'AISC_Source'] = aisc_result.get('aisc_source', 'unknown')
 
         # Now calculate alpha WITH SMC scores available
-        progress.progress(75, text="🎯 7-model alpha scoring...")
+        progress.progress(75, text="Alpha scoring (11 models)...")
         
         alpha_models_storage = {}
         alpha_breakdown_storage = {}
@@ -3731,7 +3391,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
                 df.at[idx, 'Market_Buzz'] = False
                 df.at[idx, 'Volume_Spike_Pct'] = 0.0
         
-        progress.progress(82, text="🔴 Sell-in-time analysis...")
+        progress.progress(82, text="Sell risk analysis...")
         
         sell_triggers_storage = {}
         
@@ -3747,7 +3407,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
             # CRITICAL FIX: Store real triggers
             sell_triggers_storage[row['Symbol']] = sell['all_triggers']
         
-        progress.progress(90, text="✅ Final arbitration...")
+        progress.progress(90, text="Final arbitration...")
         
         # Classify sleeves
         for idx, row in df.iterrows():
@@ -3923,7 +3583,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
             
             df.at[idx, 'Recommendation_Stability'] = stability
         
-        progress.progress(100, text="✅ Complete!")
+        progress.progress(100, text="Analysis complete")
 
         # ------------------------------------------------------------------------
         # Governance: validate, apply strict mode, build evidence pack
@@ -3965,6 +3625,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
             st.session_state.evidence_pack = None
 
         st.session_state.results = df
+        st.session_state.last_analysis_utc = datetime.datetime.now(datetime.timezone.utc)
         st.session_state.news_cache = news_cache
         st.session_state.macro_regime = macro_regime
         st.session_state.conf_breakdown_storage = conf_breakdown_storage
@@ -3987,7 +3648,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
             except Exception:
                 st.session_state.active_alerts = []
 
-        st.success("✅ World-class analysis complete!")
+        st.success("Analysis complete.")
         st.rerun()
     
     except Exception as e:
@@ -4033,7 +3694,7 @@ if st.button("🚀 RUN WORLD-CLASS ANALYSIS", type="primary", use_container_widt
             st.warning(f"Could not save failure evidence pack: {pack_error}")
         
         # Ensure Streamlit keeps rendering
-        st.info("💡 The app is still running. You can try again or check the technical details above.")
+        st.info("The app is still running. You can try again or check the technical details above.")
 
 # ============================================================================
 # DISPLAY RESULTS
@@ -4067,7 +3728,7 @@ def render_daily_summary(df, macro_regime, cash):
     """Render daily summary"""
     
     st.markdown("---")
-    st.header("📊 DAILY EXECUTIVE SUMMARY")
+    st.header("DAILY EXECUTIVE SUMMARY")
     
     # V5.0: Explicit np.float64 casting to prevent precision drift
     total_mv = np.float64(df['Market_Value'].sum())
@@ -4178,7 +3839,7 @@ if 'results' in st.session_state:
 
     # Alerts for significant changes
     st.markdown("---")
-    st.markdown("### 🚨 Alerts")
+    st.markdown("### Alerts")
     
     alerts = []
     pack = st.session_state.get('evidence_pack')
@@ -4256,7 +3917,7 @@ if 'results' in st.session_state:
             st.caption(f"Pack id: {pack.get('evidence_pack_id', 'Unknown')} • created: {pack.get('created_at_utc', 'Unknown')}")
 
             # "What changed since last run?" diff
-            st.markdown("### 📊 What Changed Since Last Run?")
+            st.markdown("### What Changed Since Last Run?")
             
             saved_packs = list_evidence_packs()
             prev_pack = None
@@ -4331,10 +3992,10 @@ if 'results' in st.session_state:
                 else:
                     st.info("No significant changes detected.")
             else:
-                st.info("💡 No prior evidence pack found. Run analysis again to see changes.")
+                st.info("No prior evidence pack found. Run analysis again to see changes.")
 
             # Rebalance plan table
-            st.markdown("### 💰 Rebalance Plan")
+            st.markdown("### Rebalance Plan")
             
             # V5.0: Hard-lock audit gate - disable all buttons if audit fails
             audit_passed = st.session_state.get('audit_passed', False)
@@ -4535,7 +4196,7 @@ if 'results' in st.session_state:
     st.markdown("---")
     
     st.markdown('<div class="command-center">', unsafe_allow_html=True)
-    st.header("🎯 COMMAND CENTER")
+    st.header("COMMAND CENTER")
     
     col1, col2 = st.columns(2)
     
@@ -4636,13 +4297,14 @@ if 'results' in st.session_state:
                 })
     
     # V8.0: Decision-First Layout with TA, Optimizer, and Alerts tabs
-    tab_names = ["⚡ Actions Today", "📊 Technical Analysis", "📈 Portfolio Optimizer",
-                 "✨ North American Discoveries", "👁️ Watchlist Radar"]
+    tab_names = ["Actions", "Technical Analysis", "Portfolio Optimizer",
+                 "Market Scanner", "Watchlist"]
     actions_tab, ta_tab, optimizer_tab, discovery_tab, watchlist_tab = st.tabs(tab_names)
     
-    # Tab 1: Actions Today (show content only if RED status, otherwise show green checkmark)
+    # Tab 1: Actions Today
     with actions_tab:
-        st.header("⚡ Actions Today")
+      try:
+        st.header("Actions Today")
         
         # V5.0: Warning banner if audit not passed
         audit_passed = st.session_state.get('audit_passed', False)
@@ -4725,7 +4387,7 @@ if 'results' in st.session_state:
                     st.warning(msg)
 
             # V6.5: Portfolio Review & Rebalance Audit – Before vs. After, 5% Sovereign Drift strictly enforced
-            st.markdown("### 📜 Portfolio Review & Rebalance Audit")
+            st.markdown("### Portfolio Review & Rebalance Audit")
             st.caption("5% Sovereign Drift gate strictly enforced. Below: Before vs. After for each suggested trade.")
             if rebalance_statuses and 'results' in st.session_state:
                 audit_rows = []
@@ -4818,12 +4480,15 @@ if 'results' in st.session_state:
             if 'results' in st.session_state:
                 rebalance_table = compute_rebalance_table(df, total_value)
                 if not rebalance_table.empty:
-                    st.markdown("### 📋 Rebalance Plan Summary")
+                    st.markdown("### Rebalance Plan Summary")
                     st.dataframe(rebalance_table, use_container_width=True, hide_index=True)
-    
-    # Tab 2: Technical Analysis (V8.0)
+      except Exception as _tab_err:
+        st.error(f"Actions tab error: {_tab_err}")
+
+    # Tab 2: Technical Analysis
     with ta_tab:
-        st.header("📊 Technical Analysis Dashboard")
+      try:
+        st.header("Technical Analysis")
         st.caption("RSI, MACD, Bollinger Bands, OBV, ADX for each position")
 
         if not TA_MODULE_AVAILABLE:
@@ -4920,10 +4585,13 @@ if 'results' in st.session_state:
                                     st.text(f"  Nearest Support: ${support:.2f}")
                                 if resistance:
                                     st.text(f"  Nearest Resistance: ${resistance:.2f}")
+      except Exception as _tab_err:
+        st.error(f"Technical Analysis tab error: {_tab_err}")
 
-    # Tab 3: Portfolio Optimizer (V8.0)
+    # Tab 3: Portfolio Optimizer
     with optimizer_tab:
-        st.header("📈 Portfolio Optimization")
+      try:
+        st.header("Portfolio Optimization")
         st.caption("Mean-Variance, Risk Parity, Correlation Analysis, and Concentration Risk")
 
         if not OPTIMIZER_AVAILABLE:
@@ -5031,9 +4699,12 @@ if 'results' in st.session_state:
                                 st.warning("Optimization did not converge. Try adjusting parameters.")
                         except Exception as e:
                             st.error(f"Optimization failed: {e}")
+      except Exception as _tab_err:
+        st.error(f"Portfolio Optimizer tab error: {_tab_err}")
 
-    # Tab 4: North American Discoveries (V7.0: Sovereign Global Scan – live tickers, no CSV)
+    # Tab 4: Market Scanner
     with discovery_tab:
+      try:
         master_symbols = []
         master_count = 0
         
@@ -5064,55 +4735,33 @@ if 'results' in st.session_state:
 
         total_mv = np.float64(df['Market_Value'].sum()) if not df.empty else 0.0
         total_value = np.float64(total_mv + np.float64(st.session_state.cash))
-        st.header("✨ North American Discoveries (V7.0 Sovereign Global Scan)")
-        st.caption(f"Live 1,000+ North American mining tickers • Best picks from {master_count} ranked by (Alpha + FA) / Risk")
-        
-        # V5.0: TSX-V Filter Toggle
-        include_tsxv = st.checkbox(
-            "☑️ Include TSX-V (High Risk)",
-            value=st.session_state.get('include_tsxv', False),
-            key='include_tsxv_checkbox',
-            help="Include TSX Venture Exchange (.V) tickers, which are higher risk but may offer higher returns"
-        )
-        st.session_state.include_tsxv = include_tsxv
-        
-        # V5.0: Info box explaining North American Discoveries mode
-        st.info("💡 **Displaying 'Best North American' Alpha leaders. Portfolio constraints (Diversification Veto, Market Impact Gate) are temporarily disabled for discovery.**")
-        
-        # V5.0: Global Opportunity Scan callback function
-        def toggle_global_scan():
-            """Callback function to toggle global scan and trigger rerun"""
-            current_value = st.session_state.get('global_opportunity_scan_checkbox', True)
-            st.session_state.global_opportunity_scan = current_value
-            st.rerun()
-        
-        # V5.0: Control checkboxes
-        col1, col2 = st.columns(2)
+        st.header("Market Scanner")
+        st.caption(f"Scanning {master_count} North American gold, silver & uranium miners ranked by (Alpha + FA) / Risk")
+
+        # Controls row
+        col1, col2, col3 = st.columns(3)
         with col1:
-            debug_mode = st.checkbox("🔍 Debug Mode", 
-                                    value=st.session_state.get('debug_mode', False), 
-                                    key='debug_mode_checkbox',
-                                    help="Show all stocks being scanned and which filters they're failing")
-            st.session_state.debug_mode = debug_mode
-        
-        with col2:
-            # V5.0: Global Opportunity Scan checkbox with callback
-            # Default to ON for Global Discoveries tab
             global_opportunity_scan = st.checkbox(
-                "🔓 Global Search", 
-                value=st.session_state.get('global_opportunity_scan', True),  # Default to True
+                "Global Search",
+                value=st.session_state.get('global_opportunity_scan', True),
                 key='global_opportunity_scan_checkbox',
-                help=f"Wide-Net: Search {master_count} tickers, bypass all Diversification Veto and Impact Gate checks",
-                on_change=toggle_global_scan
+                help=f"Search {master_count} tickers, bypass diversification and impact constraints"
             )
-            # Sync session state
             st.session_state.global_opportunity_scan = global_opportunity_scan
-        
-        if global_opportunity_scan:
-            st.info(f"🔓 **Global Search Active:** Wide-Net approach - searching {master_count} tickers, ignoring all portfolio constraints")
-            st.info("💡 **Displaying 'Best in World' Alpha leaders. Portfolio constraints (Diversification Veto, Market Impact Gate) are temporarily disabled for discovery.**")
-        else:
-            st.caption("Top 5 autonomous finds ranked by (Alpha + FA Score) / Risk • All trades respect 1.5% Market Impact Gate")
+        with col2:
+            include_tsxv = st.checkbox(
+                "Include TSX-V",
+                value=st.session_state.get('include_tsxv', False),
+                key='include_tsxv_checkbox',
+                help="Include TSX Venture Exchange (.V) tickers"
+            )
+            st.session_state.include_tsxv = include_tsxv
+        with col3:
+            debug_mode = st.checkbox("Debug Mode",
+                                    value=st.session_state.get('debug_mode', False),
+                                    key='debug_mode_checkbox',
+                                    help="Show all scanned stocks and filter status")
+            st.session_state.debug_mode = debug_mode
         
         # V7.0: Sovereign Global Scan – live mining tickers (get_all_mining_tickers) or CSV fallback
         if master_symbols:
@@ -5127,9 +4776,7 @@ if 'results' in st.session_state:
                 if not global_opportunity_scan and not include_tsxv:
                     symbols_to_scan = [s for s in symbols_to_scan if not s.upper().endswith('.V')]
 
-                st.info(f"🔍 Scanning {len(symbols_to_scan)} symbols (Sovereign Global Scan)")
-                if not global_opportunity_scan and not include_tsxv:
-                    st.caption("⚠️ TSX-V (.V) tickers excluded (High Risk filter active)")
+                st.caption(f"Scanning {len(symbols_to_scan)} symbols" + (" (TSX-V excluded)" if not include_tsxv and not global_opportunity_scan else ""))
 
                 # V5.0: Build recommendations from master list (Wide-Net approach)
                 recommendations_data = []
@@ -5151,8 +4798,7 @@ if 'results' in st.session_state:
                     max_price = UI_CONFIG.get('max_price', 5.00)
                     max_mcap = UI_CONFIG.get('max_mcap_millions', 500.0)
 
-                # V6.0: Proof of Work – Detailed Execution Log (replaces generic progress)
-                st.markdown("##### 📜 Proof of Work Log")
+                # Execution log
                 proof_log: list = []
                 def _log(s: str):
                     proof_log.append(s)
@@ -5168,12 +4814,10 @@ if 'results' in st.session_state:
                 
                 if tiingo_key_detected or tiingo_key_present:
                     # V7.4: TIINGO_API_KEY detected by Black Box - COMPLETELY BYPASS canary test, force full 1,000+ Global Scan
-                    _log("✅ TIINGO_API_KEY detected by Black Box — COMPLETELY BYPASSING canary test.")
-                    _log("🔓 Canary Test BYPASSED — Forcing full 1,000+ Global Scan.")
-                    _log("🚀 Full universe scan unlocked — attempting 1,000+ stock scan.")
+                    _log("Tiingo API key detected — full universe scan enabled.")
                 else:
                     # V7.4: No TIINGO_API_KEY - Run canary test for diagnostics only (does not block scan)
-                    _log("🔬 Canary test: GOLD (NYSE), ABX.TO (TSX), DSV.V (TSXV)...")
+                    _log("Canary test: GOLD (NYSE), ABX.TO (TSX), DSV.V (TSXV)...")
                     canary_symbols = [("GOLD", False), ("ABX.TO", True), ("DSV.V", True)]
                     canary_ok = False
                     canary_fail = []
@@ -5185,9 +4829,9 @@ if 'results' in st.session_state:
                         canary_fail.append(csym)
                     
                     if canary_ok:
-                        _log("✅ Canary OK — Tiingo Data Pipe connected.")
+                        _log("Canary OK — Tiingo connected.")
                     else:
-                        _log("⚠️ Canary failed — continuing scan with Futures Tickers (GC=F, SI=F, UX=F) as benchmarks.")
+                        _log("Canary failed — continuing scan using futures benchmarks.")
                 
                 # V7.4: DISABLED VETO - Always continue scan regardless of canary status
                 # V5.0: Wide-Net iteration - scan ALL symbols via Tiingo Power (no veto)
@@ -5197,8 +4841,8 @@ if 'results' in st.session_state:
                         progress_bar.progress(progress)
                         # Update status text every 10 symbols or at start
                         if idx % 10 == 0 or idx == 0:
-                            status_text.info(f"🔍 Scanning: {idx + 1}/{len(symbols_to_scan)} • Analyzed: {symbols_analyzed} • Failed: {symbols_failed}")
-                        _log(f"🔍 Searching Tiingo Power: **{symbol}**...")
+                            status_text.info(f"Scanning: {idx + 1}/{len(symbols_to_scan)} | OK: {symbols_analyzed} | Skipped: {symbols_failed}")
+                        _log(f"Fetching: {symbol}")
 
                         # Detect if ticker is Canadian (by suffix or Country/Jurisdiction)
                         is_canadian = symbol.upper().endswith('.V') or symbol.upper().endswith('.TO')
@@ -5231,7 +4875,7 @@ if 'results' in st.session_state:
                                     hist_cache_rec[symbol] = hist
                                     st.session_state['hist_cache'] = hist_cache_rec
                                     symbols_analyzed += 1
-                                    _log(f"✅ **{symbol}** → SUCCESS (via {successful_symbol or symbol})")
+                                    _log(f"{symbol} OK (via {successful_symbol or symbol})")
                                 else:
                                     # V7.4: Additional yfinance fallback attempt if fetch_ticker_with_fallback failed
                                     # Map yfinance data to match Tiingo format exactly
@@ -5267,24 +4911,24 @@ if 'results' in st.session_state:
                                                 hist_cache_rec[symbol] = hist
                                                 st.session_state['hist_cache'] = hist_cache_rec
                                                 symbols_analyzed += 1
-                                                _log(f"✅ **{symbol}** → SUCCESS (via yfinance direct fallback)")
+                                                _log(f"{symbol} OK (via yfinance direct fallback)")
                                             else:
                                                 symbols_failed += 1
-                                                _log(f"⏭️ **{symbol}** → SKIP (no price data from Tiingo or yfinance)")
+                                                _log(f"{symbol} SKIP (no price data from Tiingo or yfinance)")
                                                 continue
                                         except Exception as yf_err:
                                             symbols_failed += 1
-                                            _log(f"⏭️ **{symbol}** → SKIP (Tiingo failed, yfinance error: {str(yf_err)[:50]})")
+                                            _log(f"{symbol} SKIP (Tiingo failed, yfinance error: {str(yf_err)[:50]})")
                                             continue
                                     else:
                                         symbols_failed += 1
-                                        _log(f"⏭️ **{symbol}** → SKIP (no price data, yfinance not available)")
+                                        _log(f"{symbol} SKIP (no price data, yfinance not available)")
                                         continue
                             elif hist.empty:
                                 symbols_failed += 1
                                 if data_health is not None:
                                     data_health[symbol] = {'status': 'skip', 'reason': 'No price data available'}
-                                _log(f"⏭️ **{symbol}** → SKIP (cache empty)")
+                                _log(f"{symbol} SKIP (cache empty)")
                                 continue
                         
                         # Re-check symbol_row after potential fetch
@@ -5432,7 +5076,7 @@ if 'results' in st.session_state:
                             # (Some juniors may not have market cap data - don't exclude them)
                             market_cap_tier = 'UNKNOWN'
                             market_cap_filter_passed = True  # Allow through if data unavailable
-                            _log(f"⚠️ **{symbol}** → Market Cap data unavailable (allowing through)")
+                            _log(f"{symbol} market cap unavailable (allowing through)")
                         
                         # V7.5: Explicitly DO NOT filter based on Revenue or P/E
                         # Juniors with 0 revenue or negative P/E are investing in exploration - this is expected
@@ -5441,7 +5085,7 @@ if 'results' in st.session_state:
                         # V7.5: CRITICAL FIX - Skip stocks that fail market cap filter
                         if not market_cap_filter_passed:
                             symbols_failed += 1
-                            _log(f"⏭️ **{symbol}** → SKIP (Market Cap filter failed: {filter_failures[-1] if filter_failures else 'outside sweet spot'})")
+                            _log(f"{symbol} SKIP (Market Cap filter failed: {filter_failures[-1] if filter_failures else 'outside sweet spot'})")
                             continue  # Skip this symbol - don't add to recommendations
     
                         # V7.0: Forensic layer – AISC & P/NAV for mcap > $500M
@@ -5589,9 +5233,9 @@ if 'results' in st.session_state:
                     st.markdown("**Execution log**")
                     st.code("\n".join(proof_log), language=None)
                 if symbols_analyzed > 0:
-                    status_text.success(f"⚡ Tiingo Power Complete: **{symbols_analyzed}/{len(symbols_to_scan)}** symbols analyzed • {symbols_failed} skipped")
+                    status_text.success(f"Scan complete: {symbols_analyzed}/{len(symbols_to_scan)} symbols analyzed, {symbols_failed} skipped")
                 else:
-                    status_text.warning(f"⚠️ Tiingo Power: 0/{len(symbols_to_scan)} symbols loaded — Check hey.env for TIINGO_API_KEY")
+                    status_text.warning(f"0/{len(symbols_to_scan)} symbols loaded — check hey.env for TIINGO_API_KEY")
                 
                 # Convert to DataFrame and sort by V7.5: Prioritize Junior/Mid-Tier + 15-Year Sharpe + Shanghai Premium
                 rec_df = pd.DataFrame(recommendations_data)
@@ -5658,7 +5302,7 @@ if 'results' in st.session_state:
                     junior_count = len(rec_df[rec_df.get('Market_Cap_Tier', '') == 'JUNIOR_MIDTIER'])
                     high_quality_count = len(rec_df[rec_df.get('Market_Cap_Tier', '') == 'HIGH_QUALITY_EXCEPTION'])
                     if junior_count > 0 or high_quality_count > 0:
-                        _log(f"📊 Prioritization: {junior_count} Junior/Mid-Tier stocks, {high_quality_count} High Quality Exceptions")
+                        _log(f"Prioritization: {junior_count} Junior/Mid-Tier, {high_quality_count} High Quality Exceptions")
                     
                     # V5.0: Global Search - explicitly clear gates for all candidates
                     if global_opportunity_scan:
@@ -5895,7 +5539,7 @@ if 'results' in st.session_state:
         
         # V5.0: Debug Mode - Show all stocks and filter status
         if debug_mode and debug_data:
-            st.markdown("### 🔍 Debug Mode: All Stocks Scanned")
+            st.markdown("### Debug Mode: All Stocks Scanned")
             debug_df = pd.DataFrame(debug_data)
             st.dataframe(
                 debug_df.style.format({
@@ -5967,9 +5611,9 @@ if 'results' in st.session_state:
             if not top_5.empty and 'Market_Cap_Tier' in top_5.columns:
                 junior_in_top5 = len(top_5[top_5['Market_Cap_Tier'] == 'JUNIOR_MIDTIER'])
                 if junior_in_top5 > 0:
-                    _log(f"✅ Top 5 includes {junior_in_top5} Junior/Mid-Tier stock(s)")
+                    _log(f"Top 5 includes {junior_in_top5} Junior/Mid-Tier stock(s)")
                 else:
-                    _log(f"⚠️ Top 5 contains 0 Junior/Mid-Tier stocks - may need more symbols scanned")
+                    _log(f"Top 5 contains 0 Junior/Mid-Tier stocks — may need broader scan")
         else:
             top_5 = pd.DataFrame()
             filtered_by_action = 0
@@ -6022,11 +5666,11 @@ if 'results' in st.session_state:
             
             st.warning(f"⚠️ **No picks found.** Reasons: {'; '.join(reasons)}")
             if not global_opportunity_scan:
-                st.info("💡 **Tip:** Enable 'Global Opportunity Scan' above to see 'Best in World' stocks ignoring Diversification Veto and Market Impact Gate.")
+                st.info("**Tip:** Enable 'Global Opportunity Scan' above to see 'Best in World' stocks ignoring Diversification Veto and Market Impact Gate.")
             else:
-                st.info("💡 **Tip:** Enable Debug Mode above to see all stocks and which specific filters they're failing.")
+                st.info("**Tip:** Enable Debug Mode above to see all stocks and which specific filters they're failing.")
         else:
-            st.success(f"✅ Found {len(top_5)} top recommendations")
+            st.success(f"Found {len(top_5)} top recommendations")
             
             # Display as cards
             for idx, row in top_5.iterrows():
@@ -6084,22 +5728,33 @@ if 'results' in st.session_state:
                     
                     with col3:
                         if row['Action'] == 'Buy':
-                            st.success("✅ BUY")
+                            st.success("BUY")
                         else:
                             st.info("HOLD")
-                    
+                        # Add to watchlist button
+                        _sym = row['Symbol']
+                        _starred = st.session_state.get('starred_symbols', [])
+                        if _sym not in _starred:
+                            if st.button("+ Watchlist", key=f"wl_add_{_sym}"):
+                                if 'starred_symbols' not in st.session_state:
+                                    st.session_state.starred_symbols = []
+                                st.session_state.starred_symbols.append(_sym)
+                                st.rerun()
+                        else:
+                            st.caption("On watchlist")
+
                     # Show FA reasoning
                     if row['FA_Reasoning']:
-                        with st.expander(f"📊 Fundamental Analysis: {row['Symbol']}"):
+                        with st.expander(f"Fundamental Analysis: {row['Symbol']}"):
                             st.caption(row['FA_Reasoning'])
                     
                     # V5.0: Alpha DNA Parameter Breakdown
-                    with st.expander(f"🔬 View Alpha DNA & Parameter Weights: {row['Symbol']}", expanded=False):
+                    with st.expander(f"Alpha DNA & Parameter Weights: {row['Symbol']}", expanded=False):
                         # 2-column layout: Raw Scores (Left) and Contribution to Weight (Right)
                         dna_col1, dna_col2 = st.columns(2)
                         
                         with dna_col1:
-                            st.markdown("#### 📊 Raw Scores")
+                            st.markdown("#### Raw Scores")
                             st.metric("Alpha Score", f"{row.get('Alpha_Score', 0):.1f}/100")
                             st.metric("FA Score", f"{row.get('FA_Score', 0):+.1f}")
                             st.metric("Risk Score", f"{row.get('Risk_Score', 50):.0f}/100")
@@ -6108,7 +5763,7 @@ if 'results' in st.session_state:
                                 st.caption(f"Volume Spike: {row['Volume_Spike_Pct']:.1f}%")
                         
                         with dna_col2:
-                            st.markdown("#### ⚖️ Contribution to Weight")
+                            st.markdown("#### Contribution to Weight")
                             # Calculate contribution percentages
                             alpha_score = row.get('Alpha_Score', 0)
                             fa_score = row.get('FA_Score', 0)
@@ -6137,7 +5792,7 @@ if 'results' in st.session_state:
                         st.markdown("---")
                         
                         # Parameter Scorecard Table
-                        st.markdown("#### 📋 Parameter Scorecard")
+                        st.markdown("#### Parameter Scorecard")
                         
                         # Build scorecard data from available row data
                         scorecard_data = []
@@ -6247,7 +5902,7 @@ if 'results' in st.session_state:
 
                         # V6.0: Micro-Macro Auditor (FA/TA breakdown)
                         st.markdown("---")
-                        st.markdown("#### 🎯 Micro-Macro Auditor")
+                        st.markdown("#### Micro-Macro Auditor")
                         micro_aisc = row.get("AISC", row.get("aisc"))
                         aisc_sc = max(0, min(100, 100 - (float(micro_aisc) / 20))) if micro_aisc is not None and isinstance(micro_aisc, (int, float)) else 50
                         cash = row.get("Cash", row.get("cash", row.get("totalCash")))
@@ -6282,7 +5937,7 @@ if 'results' in st.session_state:
                                 proj = project_30d_window(row["Symbol"], metal=row.get("metal", "Gold"), hist=hist if not hist.empty else None)
                                 lo, hi, ex = proj.get("low_30d"), proj.get("high_30d"), proj.get("expected_30d")
                                 if not (np.isnan(lo) and np.isnan(hi) and np.isnan(ex)):
-                                    st.markdown("#### 📈 Projected 30d Window")
+                                    st.markdown("#### Projected 30d Window")
                                     st.caption("Model A (Mean Reversion) · B (Momentum/RS) · C (Commodity Proxy)")
                                     st.metric("Expected (30d)", f"${ex:.2f}" if not np.isnan(ex) else "—", f"Low ${lo:.2f} · High ${hi:.2f}" if not (np.isnan(lo) or np.isnan(hi)) else "")
                             except Exception:
@@ -6290,8 +5945,39 @@ if 'results' in st.session_state:
                     
                     st.markdown("---")
         
+        # ── Portfolio Rearrangement Suggestions ──────────────────────────────
+        if not top_5.empty and 'results' in st.session_state and not st.session_state.results.empty:
+            results_df_rearr = st.session_state.results.copy()
+            # Identify weakest portfolio positions: highest sell risk + lowest alpha
+            if 'Sell_Risk_Score' in results_df_rearr.columns and 'Alpha_Score' in results_df_rearr.columns:
+                results_df_rearr['_weakness'] = results_df_rearr['Sell_Risk_Score'] - results_df_rearr['Alpha_Score']
+                weakest = results_df_rearr.nlargest(3, '_weakness')
+                # Filter scanner picks that are NOT already in portfolio
+                new_picks = top_5[~top_5['Symbol'].isin(results_df_rearr['Symbol'].values)].head(3)
+                if not weakest.empty and not new_picks.empty:
+                    st.markdown("---")
+                    st.subheader("Portfolio Rearrangement Suggestions")
+                    st.caption("Comparing weakest portfolio positions against top scanner finds")
+                    swap_data = []
+                    for i in range(min(len(weakest), len(new_picks))):
+                        w = weakest.iloc[i]
+                        n = new_picks.iloc[i]
+                        swap_data.append({
+                            'Sell': w['Symbol'],
+                            'Sell Alpha': f"{w['Alpha_Score']:.0f}",
+                            'Sell Risk': f"{w['Sell_Risk_Score']:.0f}",
+                            'Buy': n['Symbol'],
+                            'Buy Alpha': f"{n['Alpha_Score']:.0f}",
+                            'Buy Risk': f"{n['Risk_Score']:.0f}",
+                            'Score Gain': f"+{n['Combined_Score'] - (w['Alpha_Score'] / max(w['Sell_Risk_Score'], 1)):.1f}"
+                        })
+                    if swap_data:
+                        swap_df = pd.DataFrame(swap_data)
+                        st.dataframe(swap_df, use_container_width=True, hide_index=True)
+                        st.caption("These are suggestions only. Always verify with your own due diligence before executing trades.")
+
         # Show full recommendations table
-        with st.expander("📋 Full Recommendations Table", expanded=False):
+        with st.expander("Full Recommendations Table", expanded=False):
             # V7.5: Include Market Cap and Tier in display
             display_cols = ['Symbol', 'Market_Cap_M', 'Market_Cap_Tier', 'Alpha_Score', 'FA_Score', 'Combined_Score', 'Risk_Score', 
                           'Action', 'Market_Buzz', 'Diversification_Veto']
@@ -6326,11 +6012,14 @@ if 'results' in st.session_state:
                 )
             else:
                 st.info("No recommendations available")
-    
-    # Tab 3: Watchlist Radar
+      except Exception as _tab_err:
+        st.error(f"Market Scanner tab error: {_tab_err}")
+
+    # Tab 5: Watchlist
     with watchlist_tab:
-        st.header("👁️ Watchlist Radar")
-        st.caption("Track starred symbols from Sovereign Global Scan (1,000+ live mining tickers) with trend indicators")
+      try:
+        st.header("Watchlist")
+        st.caption("Track starred symbols with trend indicators")
         
         if 'starred_symbols' not in st.session_state:
             st.session_state.starred_symbols = []
@@ -6351,7 +6040,7 @@ if 'results' in st.session_state:
                 master_symbols = wl_symbols
                 if master_symbols:
                     # Star/unstar interface
-                    st.markdown("### ⭐ Starred Symbols")
+                    st.markdown("### Starred Symbols")
                     selected_symbols = st.multiselect(
                         "Select symbols to star",
                         master_symbols,
@@ -6423,7 +6112,7 @@ if 'results' in st.session_state:
                                 watchlist_df = pd.DataFrame(watchlist_data)
                                 st.dataframe(watchlist_df, use_container_width=True, hide_index=True)
                             else:
-                                st.info("💡 Run analysis to see Alpha scores and trends for starred symbols")
+                                st.info("Run analysis to see Alpha scores and trends for starred symbols")
                     else:
                         st.info("⭐ Select symbols above to add them to your watchlist")
                 else:
@@ -6432,11 +6121,14 @@ if 'results' in st.session_state:
                 st.error(f"Error loading watchlist: {str(e)[:100]}")
         else:
             st.warning("No mining tickers available (Sovereign Global Scan or CSV fallback)")
-        # ========================================================================
-        # DETAILED POSITION ANALYSIS
-        # ========================================================================
-        
-        st.header("📊 Detailed Position Analysis")
+      except Exception as _tab_err:
+        st.error(f"Watchlist tab error: {_tab_err}")
+
+    # ========================================================================
+    # DETAILED POSITION ANALYSIS
+    # ========================================================================
+
+    st.header("Detailed Position Analysis")
     
     # Add ranking and sort
     df = add_ranking_columns(df)
@@ -6458,11 +6150,11 @@ if 'results' in st.session_state:
         
         # Stability indicator
         if stability == 'Breaks':
-            st.error(f"⚠️ Recommendation Stability: {stability} - Veto applied")
+            st.error(f"Recommendation Stability: {stability} - Veto applied")
         elif stability == 'Fragile':
-            st.warning(f"⚠️ Recommendation Stability: {stability} - Near threshold")
+            st.warning(f"Recommendation Stability: {stability} - Near threshold")
         else:
-            st.caption(f"✅ Recommendation Stability: {stability}")
+            st.caption(f"Recommendation Stability: {stability}")
         
         # Primary gating reason
         gating_reason = row.get('Primary_Gating_Reason', '')
@@ -6541,7 +6233,7 @@ if 'results' in st.session_state:
                 st.warning(warn)
         
         # Detailed breakdown
-        with st.expander(f"🔍 Complete Analysis for {row['Symbol']}", expanded=False):
+        with st.expander(f"Complete Analysis for {row['Symbol']}", expanded=False):
             
             # Gates
             st.subheader("🚦 Gate Status")
@@ -6607,7 +6299,7 @@ if 'results' in st.session_state:
             
             # News
             st.markdown("---")
-            st.subheader("📰 Recent News (Last 90 days)")
+            st.subheader("Recent News (Last 90 days)")
             
             ticker_news = news_cache.get(row['Symbol'], [])
             if ticker_news:
@@ -6625,13 +6317,13 @@ if 'results' in st.session_state:
                     st.caption(item.get('publisher', 'Market'))
         
         st.markdown("---")
-    
+
     # Export
     st.download_button(
-        "📥 Download Complete Analysis",
+        "Download Analysis (CSV)",
         df.to_csv(index=False),
         f"alpha_miner_analysis_{datetime.date.today()}.csv",
         use_container_width=True
     )
 
-st.caption(f"💎 Alpha Miner Pro {VERSION} • Survival > Alpha • Sell-In-Time")
+st.caption(f"Alpha Miner Pro {VERSION}")
