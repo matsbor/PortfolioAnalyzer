@@ -4826,76 +4826,29 @@ if 'results' in st.session_state:
                         symbol_row = results_df[results_df['Symbol'] == symbol] if not results_df.empty and 'Symbol' in results_df.columns else pd.DataFrame()
                         hist = hist_cache_rec.get(symbol, pd.DataFrame())
                     
-                        # If not in results, try to fetch and calculate alpha (Wide-Net approach)
+                        # If not in results, try to fetch and calculate alpha
                         if symbol_row.empty:
-                            # V5.0: Force fetch via Tiingo Power with STRICT RETURN policy
                             if hist.empty:
+                                # fetch_ticker_with_fallback already tries Tiingo + yfinance
                                 hist, successful_symbol = fetch_ticker_with_fallback(
-                                    symbol, 
+                                    symbol,
                                     period="1y",
                                     is_canadian=is_canadian,
                                     data_health=data_health
                                 )
                                 if not hist.empty:
-                                    # Cache with original symbol key, but note successful variant
                                     hist_cache_rec[symbol] = hist
                                     st.session_state['hist_cache'] = hist_cache_rec
                                     symbols_analyzed += 1
                                     _log(f"{symbol} OK (via {successful_symbol or symbol})")
                                 else:
-                                    # V7.4: Additional yfinance fallback attempt if fetch_ticker_with_fallback failed
-                                    # Map yfinance data to match Tiingo format exactly
-                                    if YFINANCE:
-                                        try:
-                                            # Suppress yfinance warnings (delisted symbols are expected)
-                                            import warnings
-                                            with warnings.catch_warnings():
-                                                warnings.filterwarnings("ignore", category=UserWarning)
-                                                warnings.filterwarnings("ignore", message=".*possibly delisted.*")
-                                                yf_ticker = yf.Ticker(symbol)
-                                                yf_hist = yf_ticker.history(period="1y")
-                                            if not yf_hist.empty and "Close" in yf_hist.columns:
-                                                # Ensure all required columns exist
-                                                for c in ("Open", "High", "Low", "Close", "Volume"):
-                                                    if c not in yf_hist.columns:
-                                                        yf_hist[c] = np.nan
-                                                
-                                                # Extract and format to match Tiingo structure
-                                                hist = yf_hist[["Open", "High", "Low", "Close", "Volume"]].copy()
-                                                
-                                                # Ensure index is DatetimeIndex (remove timezone if present)
-                                                hist.index = pd.to_datetime(hist.index)
-                                                if hist.index.tz is not None:
-                                                    hist.index = hist.index.tz_localize(None)
-                                                
-                                                # Sort by index (Tiingo format is sorted)
-                                                hist = hist.sort_index()
-                                                
-                                                # Ensure columns are title case
-                                                hist.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-                                                
-                                                hist_cache_rec[symbol] = hist
-                                                st.session_state['hist_cache'] = hist_cache_rec
-                                                symbols_analyzed += 1
-                                                _log(f"{symbol} OK (via yfinance direct fallback)")
-                                            else:
-                                                symbols_failed += 1
-                                                _log(f"{symbol} SKIP (no price data from Tiingo or yfinance)")
-                                                continue
-                                        except Exception as yf_err:
-                                            symbols_failed += 1
-                                            _log(f"{symbol} SKIP (Tiingo failed, yfinance error: {str(yf_err)[:50]})")
-                                            continue
-                                    else:
-                                        symbols_failed += 1
-                                        _log(f"{symbol} SKIP (no price data, yfinance not available)")
-                                        continue
-                            elif hist.empty:
-                                symbols_failed += 1
-                                if data_health is not None:
-                                    data_health[symbol] = {'status': 'skip', 'reason': 'No price data available'}
-                                _log(f"{symbol} SKIP (cache empty)")
-                                continue
+                                    symbols_failed += 1
+                                    _log(f"{symbol} SKIP (no data from Tiingo or yfinance)")
+                                    continue
+                            else:
+                                # hist was in cache from a previous run
+                                symbols_analyzed += 1
+                                _log(f"{symbol} OK (cached)")
                         
                         # Re-check symbol_row after potential fetch
                         symbol_row = results_df[results_df['Symbol'] == symbol] if not results_df.empty and 'Symbol' in results_df.columns else pd.DataFrame()

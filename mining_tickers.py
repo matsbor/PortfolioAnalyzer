@@ -50,27 +50,24 @@ _TOP_100_MINERS: List[str] = [
     "MMX.TO", "TXG.TO", "LGD.TO", "ORR.TO", "LUN.TO", "FM.TO", "HBM.TO",
     "TECK.A", "TECK.B", "TRQ.TO", "IVN.TO", "CS.TO", "ERO.TO", "LAC.TO",
     "CMMC.TO",
-    # Tier 5: OTC & Additional
-    "DSVSF", "BHP", "RIO", "VALE", "GLNCY", "CNR", "CP",
+    # Tier 5: OTC & Additional (diversified global miners)
+    "DSVSF", "BHP", "RIO", "VALE", "GLNCY",
 ]
 
 # Legacy fallback (kept for backward compatibility)
 _FALLBACK_TICKERS: List[str] = _TOP_100_MINERS.copy()
-# Expand with .TO / .V / OTC variants for Canadian names
+# NOTE: We no longer expand with .TO/.V variants because
+# fetch_ticker_with_fallback() already tries geography-first variants
+# (plain, TSX:, .TO, OTC) for every symbol. Adding .TO/.V duplicates
+# just doubles API calls and inflates skip counts.
 def _expand_fallback() -> List[str]:
+    """Return deduplicated base tickers only (no .TO/.V expansion)."""
     out: Set[str] = set()
     for t in _FALLBACK_TICKERS:
         t = str(t).strip().upper()
         if not t or t in out:
             continue
         out.add(t)
-        base = re.sub(r"\.(TO|V)$", "", t)
-        if base != t:
-            continue
-        for suf in [".TO", ".V"]:
-            c = f"{base}{suf}"
-            if c not in out:
-                out.add(c)
     return sorted(out)
 
 
@@ -145,24 +142,18 @@ def get_all_mining_tickers(max_symbols: int = 2000, use_tiingo: bool = True) -> 
             # V7.3: Tiingo failed - fall through to Top 100 fallback
             pass
 
-    # V7.3: ALWAYS use Top 100 hard-mapped list as fallback (NOT restricted)
-    # This ensures discovery works even if Tiingo is unavailable
+    # Add Top 100 hard-mapped list (dedup against Tiingo search results)
+    # For each ticker, also skip if its base form is already present
+    # (e.g., skip "AEM.TO" if "AEM" was already found by Tiingo search)
     for t in _TOP_100_MINERS:
-        if t in seen:
+        base = re.sub(r"\.(TO|V|A|B)$", "", t.upper())
+        if t.upper() in seen or base in seen:
             continue
-        seen.add(t)
+        seen.add(t.upper())
+        seen.add(base)  # Mark base as seen to prevent .TO/.V duplicates later
         result.append(t)
         if len(result) >= max_symbols:
             break
-    
-    # V7.3: Also include expanded fallback variants if we haven't hit max
-    if len(result) < max_symbols:
-        fallback = _expand_fallback()
-        for t in fallback:
-            if t in seen or len(result) >= max_symbols:
-                break
-            seen.add(t)
-            result.append(t)
 
     # V7.4: Safety check - always return at least Top 100 if result is empty
     if len(result) == 0:
