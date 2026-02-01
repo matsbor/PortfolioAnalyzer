@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 V7.0: Sovereign Global Scan – Live mining ticker discovery.
-get_all_mining_tickers() returns 1,000+ North American mining symbols without CSV dependency.
+get_all_mining_tickers() returns North American mining symbols without CSV dependency.
 Uses Tiingo Search API + curated fallback.
 """
 from __future__ import annotations
@@ -25,41 +25,47 @@ except ImportError:
     requests = None
     _REQUESTS_AVAILABLE = False
 
-# North American mining keywords for Tiingo Search
+# Focused search keywords — multi-word phrases yield more relevant results
+# and avoid matching non-mining companies (e.g. "gold" alone matches Gold's Gym)
 _SEARCH_KEYWORDS = [
-    "gold", "silver", "uranium", "mining", "mineral", "metals", "copper",
-    "lithium", "cobalt", "ore", "exploration", "miner", "resources",
+    "gold mining", "silver mining", "uranium mining", "copper mining",
+    "lithium mining", "gold miner", "silver miner", "mining exploration",
+    "precious metals", "mineral resources",
 ]
 
-# V7.3: Top 100 US & Canadian Miners (Hard-Mapped Fallback)
-# Priority order: Major producers first, then developers, then explorers
-_TOP_100_MINERS: List[str] = [
-    # Tier 1: Major Gold/Silver Producers (US & Canada)
-    "GOLD", "NEM", "AEM", "FNV", "WPM", "RGLD", "AG", "PAAS", "HL", "MAG",
-    "KGC", "AUY", "BVN", "EGO", "IAG", "OR", "SSRM", "MUX", "GFI", "CDE",
-    "EXK", "FSM", "GSV", "GORO", "SVBL", "TAO", "DSV", "SVM", "AXU", "BTG",
-    # Tier 2: Uranium Producers (CCJ, NXE prioritized)
-    "CCJ", "NXE", "DNN", "UUUU", "URG", "UEC", "EU", "PEN", "NAC", "GXU",
-    "ISO", "LAM", "FCU", "FUU", "GLO", "FMC", "U", "URA",
-    # Tier 3: Base Metals & Diversified
-    "FCX", "SCCO", "TECK", "FM", "HBM", "LUN", "ERO", "IVN", "CS",
-    "LAC", "LTHM", "ALB", "SQM", "LITM", "PLL", "LIT",
-    # Tier 4: Canadian TSX Listings
-    "SKE.TO", "EQX.TO", "LUG.TO", "OR.TO", "WPM.TO", "FNV.TO", "AEM.TO",
-    "K.TO", "EDV.TO", "G.TO", "SA.TO", "NGD.TO", "B2G.TO", "AR.TO",
-    "MMX.TO", "TXG.TO", "LGD.TO", "ORR.TO", "LUN.TO", "FM.TO", "HBM.TO",
-    "TECK.A", "TECK.B", "TRQ.TO", "IVN.TO", "CS.TO", "ERO.TO", "LAC.TO",
-    "CMMC.TO",
-    # Tier 5: OTC & Additional (diversified global miners)
-    "DSVSF", "BHP", "RIO", "VALE", "GLNCY",
+# Curated US & Canadian miners — verified as actively trading (Jan 2025).
+# fetch_ticker_with_fallback() already tries .TO/.V variants for every symbol,
+# so we only include the PRIMARY listing (US ticker or .TO if TSX-only).
+# Removed: MAG (acquired by Newmont 2024), AUY (acquired by PAAS 2023),
+#   GSV (acquired by Orla 2022), AXU (acquired by First Majestic 2022),
+#   FCU (acquired by Paladin 2024), LTHM (merged into Arcadium 2024),
+#   MMX.TO (acquired by Triple Flag 2023), TRQ.TO (acquired by Rio Tinto 2022),
+#   CMMC.TO (acquired by Hudbay 2023), GORO/SVBL/TAO/DSV/GXU/ISO/FUU/NAC
+#   (delisted/non-mining/no US data), FMC (agricultural chemicals, not mining),
+#   DSVSF (OTC foreign, unreliable data), PLL (redomiciled).
+# Removed duplicates: FM/LUN/IVN/CS/HBM/ERO have .TO entries already.
+_TOP_MINERS: List[str] = [
+    # Tier 1: Major Gold/Silver Producers (US-listed)
+    "GOLD", "NEM", "AEM", "FNV", "WPM", "RGLD", "AG", "PAAS", "HL",
+    "KGC", "BVN", "EGO", "IAG", "OR", "SSRM", "MUX", "GFI", "CDE",
+    "EXK", "FSM", "SVM", "BTG",
+    # Tier 2: Uranium (US-listed)
+    "CCJ", "NXE", "DNN", "UUUU", "URG", "UEC", "EU", "URA",
+    # Tier 3: Base Metals & Lithium (US-listed)
+    "FCX", "SCCO", "TECK", "HBM", "LAC", "ALB", "SQM", "LIT",
+    # Tier 4: Canadian TSX — only tickers with NO US listing
+    "SKE.TO", "EQX.TO", "LUG.TO", "K.TO", "EDV.TO", "NGD.TO",
+    "TXG.TO", "LUN.TO", "FM.TO", "HBM.TO", "IVN.TO", "CS.TO",
+    "ERO.TO", "LAC.TO", "OSK.TO", "BTO.TO", "DPM.TO",
+    # Tier 5: Global diversified (US ADRs/listings)
+    "BHP", "RIO", "VALE", "GLNCY",
 ]
 
-# Legacy fallback (kept for backward compatibility)
-_FALLBACK_TICKERS: List[str] = _TOP_100_MINERS.copy()
-# NOTE: We no longer expand with .TO/.V variants because
-# fetch_ticker_with_fallback() already tries geography-first variants
-# (plain, TSX:, .TO, OTC) for every symbol. Adding .TO/.V duplicates
-# just doubles API calls and inflates skip counts.
+# Legacy alias
+_FALLBACK_TICKERS: List[str] = _TOP_MINERS.copy()
+_TOP_100_MINERS = _TOP_MINERS  # backward compat
+
+
 def _expand_fallback() -> List[str]:
     """Return deduplicated base tickers only (no .TO/.V expansion)."""
     out: Set[str] = set()
@@ -71,7 +77,26 @@ def _expand_fallback() -> List[str]:
     return sorted(out)
 
 
-def _tiingo_search(api_key: str, query: str, limit: int = 200) -> List[dict]:
+# OTC suffixes that indicate unreliable pink-sheet / foreign / delinquent stocks
+_OTC_REJECT_SUFFIXES = frozenset("FDQE")
+
+
+def _is_otc_junk(ticker: str) -> bool:
+    """Detect OTC pink-sheet / foreign / delinquent symbols.
+
+    5-letter all-alpha tickers ending in F (foreign), D (delinquent),
+    Q (bankruptcy), or E (delinquent SEC filing) almost never have
+    reliable price data and should be excluded from the scan.
+    """
+    t = ticker.upper().strip()
+    if "." in t:
+        return False  # Has exchange suffix (.TO, .V) — not OTC
+    if len(t) == 5 and t.isalpha() and t[-1] in _OTC_REJECT_SUFFIXES:
+        return True
+    return False
+
+
+def _tiingo_search(api_key: str, query: str, limit: int = 100) -> List[dict]:
     """Call Tiingo Search API. Returns list of {ticker, name, assetType, isActive}."""
     if not _REQUESTS_AVAILABLE or not api_key:
         return []
@@ -88,9 +113,12 @@ def _tiingo_search(api_key: str, query: str, limit: int = 200) -> List[dict]:
 
 
 def _is_north_american(ticker: str, name: str = "") -> bool:
-    """Heuristic: US (no suffix), Canada (.TO, .V), or OTC-style."""
+    """Heuristic: US (no suffix), Canada (.TO, .V). Rejects OTC junk."""
     t = (ticker or "").upper()
     n = (name or "").lower()
+    # Reject OTC pink-sheet symbols early
+    if _is_otc_junk(t):
+        return False
     if t.endswith(".TO") or t.endswith(".V"):
         return True
     if re.match(r"^[A-Z]{1,5}$", t) and not t.endswith(".L"):
@@ -100,25 +128,22 @@ def _is_north_american(ticker: str, name: str = "") -> bool:
     return False
 
 
-def get_all_mining_tickers(max_symbols: int = 2000, use_tiingo: bool = True) -> List[str]:
+def get_all_mining_tickers(max_symbols: int = 500, use_tiingo: bool = True) -> List[str]:
     """
-    V7.3: Live list of 1,000+ North American mining symbols. No CSV required.
-    
-    V7.3 Update: NOT restricted - always returns Top 100 hard-mapped list if Tiingo fails.
-    Uses Tiingo Search for keywords (gold, silver, mining, uranium, etc.), then
-    Top 100 US & Canadian Miners fallback (AEM, GOLD, FCX, CCJ, NXE, PAAS, etc.).
-    
-    Returns deduplicated, North America–filtered tickers, prioritized by tier.
+    North American mining symbols via Tiingo Search API + curated fallback.
+
+    Returns deduplicated, filtered tickers. OTC pink-sheet symbols are
+    excluded. The curated list is always appended (deduped) so that core
+    miners are never missed even when Tiingo search is down.
     """
     api_key = (os.getenv("TIINGO_API_KEY") or "").strip()
     seen: Set[str] = set()
     result: List[str] = []
 
-    # V7.3: Try Tiingo first (if available and enabled)
     if use_tiingo and _REQUESTS_AVAILABLE and api_key:
         try:
             for kw in _SEARCH_KEYWORDS:
-                items = _tiingo_search(api_key, kw, limit=250)
+                items = _tiingo_search(api_key, kw, limit=100)
                 for it in items:
                     ticker = (it.get("ticker") or "").strip()
                     if not ticker:
@@ -127,6 +152,8 @@ def get_all_mining_tickers(max_symbols: int = 2000, use_tiingo: bool = True) -> 
                     if "stock" not in asset and asset != "stock":
                         continue
                     if it.get("isActive") is False:
+                        continue
+                    if _is_otc_junk(ticker):
                         continue
                     name = it.get("name") or ""
                     if not _is_north_american(ticker, name):
@@ -137,30 +164,28 @@ def get_all_mining_tickers(max_symbols: int = 2000, use_tiingo: bool = True) -> 
                     seen.add(key)
                     result.append(ticker)
                     if len(result) >= max_symbols:
-                        return result[:max_symbols]
+                        break
+                if len(result) >= max_symbols:
+                    break
         except Exception:
-            # V7.3: Tiingo failed - fall through to Top 100 fallback
             pass
 
-    # Add Top 100 hard-mapped list (dedup against Tiingo search results)
-    # For each ticker, also skip if its base form is already present
-    # (e.g., skip "AEM.TO" if "AEM" was already found by Tiingo search)
-    for t in _TOP_100_MINERS:
+    # Always merge the curated list (dedup against Tiingo results)
+    for t in _TOP_MINERS:
         base = re.sub(r"\.(TO|V|A|B)$", "", t.upper())
         if t.upper() in seen or base in seen:
             continue
         seen.add(t.upper())
-        seen.add(base)  # Mark base as seen to prevent .TO/.V duplicates later
+        seen.add(base)
         result.append(t)
         if len(result) >= max_symbols:
             break
 
-    # V7.4: Safety check - always return at least Top 100 if result is empty
-    if len(result) == 0:
-        # Fallback to Top 100 if everything failed
-        for t in _TOP_100_MINERS:
+    # Safety: if everything failed, use curated list directly
+    if not result:
+        for t in _TOP_MINERS:
+            result.append(t)
             if len(result) >= max_symbols:
                 break
-            result.append(t)
-    
+
     return result[:max_symbols]

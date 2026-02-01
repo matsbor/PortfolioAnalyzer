@@ -2588,20 +2588,6 @@ with st.sidebar:
         live_prices = get_sovereign_spot_prices()
         benchmarks = get_global_commodity_benchmarks()
         if live_prices.get('gold_use_live', False) or live_prices.get('silver_use_live', False):
-            # Recalculate Market_Value using live prices for gold/silver positions
-            for idx, row in results_df.iterrows():
-                symbol_upper = row['Symbol'].upper()
-                # Only apply commodity price updates to physical/ETF holdings,
-                # not mining stocks (whose price != commodity price)
-                is_gold_etf = symbol_upper in ('GLD', 'IAU', 'SGOL', 'AAAU', 'BAR', 'OUNZ')
-                is_silver_etf = symbol_upper in ('SLV', 'SIVR', 'PSLV')
-
-                if is_gold_etf and np.isfinite(benchmarks.get('gold_comx', np.nan)):
-                    # For gold ETFs, update using commodity benchmark delta
-                    pass  # ETF prices already reflect live gold; no override needed
-                elif is_silver_etf and np.isfinite(benchmarks.get('silver_comx', np.nan)):
-                    pass  # ETF prices already reflect live silver; no override needed
-            
             # Recalculate total_portfolio_value with updated Market_Value
             total_mv = np.float64(results_df["Market_Value"].sum())
             total_portfolio_value = np.float64(total_mv + np.float64(st.session_state.cash))
@@ -4860,9 +4846,10 @@ if 'results' in st.session_state:
                             metal_default = 'Gold'
                             # Classify metal from symbol name or known uranium tickers
                             sym_upper = symbol.upper().replace('.TO', '').replace('.V', '')
+                            # TODO: derive metal type from fundamentals/sector instead of hardcoded sets
                             uranium_syms = {'NXE', 'CCJ', 'DNN', 'URR', 'UEC', 'UUUU', 'URG', 'EU', 'PEN',
-                                            'FCU', 'GLO', 'FIND', 'EFR', 'LAM', 'NXE', 'PDN'}
-                            silver_syms = {'AG', 'PAAS', 'MAG', 'EXK', 'HL', 'SIL', 'SILJ', 'FR', 'SSRM',
+                                            'FIND', 'EFR', 'PDN'}
+                            silver_syms = {'AG', 'PAAS', 'EXK', 'HL', 'SIL', 'SILJ', 'FR', 'SSRM',
                                            'FSM', 'CDE', 'SVM', 'SAND'}
                             if sym_upper in uranium_syms:
                                 metal_default = 'Uranium'
@@ -4925,7 +4912,7 @@ if 'results' in st.session_state:
                                 'Country': 'Unknown',
                                 'TA_Score': ta_results.get('ta_score', 50.0),
                                 'RSI': ta_results.get('rsi', 50.0),
-                                'MACD_Signal': ta_results.get('signal', 'NEUTRAL'),
+                                'MACD_Signal': ta_results.get('ta_signal', 'NEUTRAL'),
                             }
                             
                             _log(f"Syncing {row.get('metal', 'Gold')} futures with {symbol}...")
@@ -5117,7 +5104,7 @@ if 'results' in st.session_state:
                         action = row_dict.get('Action', None)
                         if action is None or (not in_portfolio and action == 'HOLD'):
                             # New candidate: derive action from alpha + TA signals
-                            if alpha_score >= 65 and ta_results.get('signal', 'NEUTRAL') != 'SELL':
+                            if alpha_score >= 65 and ta_results.get('ta_signal', 'NEUTRAL') != 'SELL':
                                 action = 'Buy'
                             elif alpha_score >= 50:
                                 action = 'HOLD'
