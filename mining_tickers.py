@@ -128,23 +128,49 @@ def _is_north_american(ticker: str, name: str = "") -> bool:
     return False
 
 
-def get_all_mining_tickers(max_symbols: int = 500, use_tiingo: bool = True) -> List[str]:
-    """
-    North American mining symbols via Tiingo Search API + curated fallback.
+# Mining-related terms that must appear in a Tiingo company name for
+# us to trust the result as an actual mining stock.
+_MINING_NAME_KEYWORDS = re.compile(
+    r"min(ing|er|eral)|gold|silver|uranium|copper|lithium|cobalt|"
+    r"metal|ore|explor|resource|royalt|stream|deposit|drill",
+    re.IGNORECASE,
+)
 
-    Returns deduplicated, filtered tickers. OTC pink-sheet symbols are
-    excluded. The curated list is always appended (deduped) so that core
-    miners are never missed even when Tiingo search is down.
+
+def get_all_mining_tickers(max_symbols: int = 200, use_tiingo: bool = True) -> List[str]:
+    """
+    North American mining symbols: curated list FIRST, Tiingo supplements.
+
+    The curated list (~59 verified tickers) is always included.  Tiingo
+    Search adds additional symbols only if they pass OTC, geography, AND
+    company-name filters (must contain mining-related keywords).
+
+    max_symbols caps the total (curated + Tiingo combined).
+    Callers should NOT pass values larger than ~300; the curated list
+    plus Tiingo supplements rarely exceeds 150 quality symbols.
     """
     api_key = (os.getenv("TIINGO_API_KEY") or "").strip()
     seen: Set[str] = set()
     result: List[str] = []
 
+    # Step 1: Curated list goes FIRST — these are guaranteed good
+    for t in _TOP_MINERS:
+        key = t.upper()
+        base = re.sub(r"\.(TO|V|A|B)$", "", key)
+        if key in seen or base in seen:
+            continue
+        seen.add(key)
+        seen.add(base)
+        result.append(t)
+
+    # Step 2: Tiingo search supplements the curated list
     if use_tiingo and _REQUESTS_AVAILABLE and api_key:
         try:
             for kw in _SEARCH_KEYWORDS:
-                items = _tiingo_search(api_key, kw, limit=100)
+                items = _tiingo_search(api_key, kw, limit=50)
                 for it in items:
+                    if len(result) >= max_symbols:
+                        break
                     ticker = (it.get("ticker") or "").strip()
                     if not ticker:
                         continue
@@ -158,34 +184,19 @@ def get_all_mining_tickers(max_symbols: int = 500, use_tiingo: bool = True) -> L
                     name = it.get("name") or ""
                     if not _is_north_american(ticker, name):
                         continue
+                    # Require company name to contain a mining-related term
+                    if not _MINING_NAME_KEYWORDS.search(name):
+                        continue
                     key = ticker.upper()
-                    if key in seen:
+                    base = re.sub(r"\.(TO|V|A|B)$", "", key)
+                    if key in seen or base in seen:
                         continue
                     seen.add(key)
+                    seen.add(base)
                     result.append(ticker)
-                    if len(result) >= max_symbols:
-                        break
                 if len(result) >= max_symbols:
                     break
         except Exception:
             pass
-
-    # Always merge the curated list (dedup against Tiingo results)
-    for t in _TOP_MINERS:
-        base = re.sub(r"\.(TO|V|A|B)$", "", t.upper())
-        if t.upper() in seen or base in seen:
-            continue
-        seen.add(t.upper())
-        seen.add(base)
-        result.append(t)
-        if len(result) >= max_symbols:
-            break
-
-    # Safety: if everything failed, use curated list directly
-    if not result:
-        for t in _TOP_MINERS:
-            result.append(t)
-            if len(result) >= max_symbols:
-                break
 
     return result[:max_symbols]

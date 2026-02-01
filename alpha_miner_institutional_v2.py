@@ -89,7 +89,7 @@ except ImportError:
 try:
     from mining_tickers import get_all_mining_tickers as _get_all_mining_tickers
     @st.cache_data(ttl=3600)
-    def get_all_mining_tickers_cached(max_symbols=2000):
+    def get_all_mining_tickers_cached(max_symbols=200):
         return _get_all_mining_tickers(max_symbols=max_symbols)
     MINING_TICKERS_AVAILABLE = True
 except ImportError:
@@ -4665,7 +4665,7 @@ if 'results' in st.session_state:
         
         if MINING_TICKERS_AVAILABLE and get_all_mining_tickers_cached:
             try:
-                master_symbols = get_all_mining_tickers_cached(max_symbols=2000) or []
+                master_symbols = get_all_mining_tickers_cached(max_symbols=200) or []
                 master_count = len(master_symbols)
                 if master_count == 0:
                     st.warning("⚠️ **Mining ticker discovery returned 0 symbols.** Check Tiingo API connection or use CSV fallback.")
@@ -5889,7 +5889,7 @@ if 'results' in st.session_state:
         wl_symbols = []
         if MINING_TICKERS_AVAILABLE and get_all_mining_tickers_cached:
             try:
-                wl_symbols = get_all_mining_tickers_cached(max_symbols=500) or []
+                wl_symbols = get_all_mining_tickers_cached(max_symbols=200) or []
             except Exception:
                 pass
         if not wl_symbols and SCANNER_AVAILABLE and load_master_discovery_list:
