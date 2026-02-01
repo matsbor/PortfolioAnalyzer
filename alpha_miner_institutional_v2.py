@@ -4733,8 +4733,8 @@ if 'results' in st.session_state:
         if master_symbols:
             try:
                 # master_symbols already loaded at top of tab
-                if 'data_health' not in st.session_state:
-                    st.session_state.data_health = {}
+                # Reset data_health each scan so skip counts don't accumulate
+                st.session_state.data_health = {}
                 data_health = st.session_state.data_health
 
                 # V5.0: Filter TSX-V by toggle, but force-include .V when Global Search is active (discovery mode)
@@ -4901,36 +4901,79 @@ if 'results' in st.session_state:
                         symbol_row = results_df[results_df['Symbol'] == symbol] if not results_df.empty and 'Symbol' in results_df.columns else pd.DataFrame()
                         
                         # If we have hist data, create a minimal row for alpha calculation
+                        ta_results = {}  # Will be populated for new candidates
                         if not hist.empty and symbol_row.empty:
-                            # Create minimal row with basic data
-                            # V7.2: Detect Uranium symbols (NXE, CCJ, DNN, URR) for Global Sector Scan
+                            # Create row with as much computed data as possible
                             metal_default = 'Gold'
-                            if symbol in ('NXE', 'CCJ', 'DNN', 'URR', 'UEC', 'UUUU', 'URG', 'EU', 'PEN'):
+                            # Classify metal from symbol name or known uranium tickers
+                            sym_upper = symbol.upper().replace('.TO', '').replace('.V', '')
+                            uranium_syms = {'NXE', 'CCJ', 'DNN', 'URR', 'UEC', 'UUUU', 'URG', 'EU', 'PEN',
+                                            'FCU', 'GLO', 'FIND', 'EFR', 'LAM', 'NXE', 'PDN'}
+                            silver_syms = {'AG', 'PAAS', 'MAG', 'EXK', 'HL', 'SIL', 'SILJ', 'FR', 'SSRM',
+                                           'FSM', 'CDE', 'SVM', 'SAND'}
+                            if sym_upper in uranium_syms:
                                 metal_default = 'Uranium'
+                            elif sym_upper in silver_syms:
+                                metal_default = 'Silver'
+
+                            close_arr = hist['Close'].dropna()
+                            last_price = float(close_arr.iloc[-1]) if len(close_arr) > 0 else 0.0
+                            last_vol = float(hist['Volume'].iloc[-1]) if 'Volume' in hist.columns else 0.0
+
+                            # Compute returns from actual data
+                            ret_7d = 0.0
+                            ret_30d = 0.0
+                            ret_90d = 0.0
+                            if len(close_arr) >= 7 and close_arr.iloc[-7] > 0:
+                                ret_7d = ((close_arr.iloc[-1] - close_arr.iloc[-7]) / close_arr.iloc[-7]) * 100
+                            if len(close_arr) >= 30 and close_arr.iloc[-30] > 0:
+                                ret_30d = ((close_arr.iloc[-1] - close_arr.iloc[-30]) / close_arr.iloc[-30]) * 100
+                            if len(close_arr) >= 90 and close_arr.iloc[-90] > 0:
+                                ret_90d = ((close_arr.iloc[-1] - close_arr.iloc[-90]) / close_arr.iloc[-90]) * 100
+
+                            # Compute 52-week high/low from hist
+                            high_52w = hist['High'].max() if 'High' in hist.columns else last_price
+                            low_52w = hist['Low'].min() if 'Low' in hist.columns else last_price
+                            pct_from_high = ((last_price - high_52w) / high_52w * 100) if high_52w > 0 else 0.0
+                            pct_from_low = ((last_price - low_52w) / low_52w * 100) if low_52w > 0 else 0.0
+
+                            # Compute full TA indicators from hist data
+                            ta_results = {}
+                            smc_score = 50.0
+                            smc_bias = 'Neutral'
+                            try:
+                                ta_results = calculate_all_ta(hist)
+                            except Exception:
+                                pass
+
+                            # Compute SMC from hist if available
+                            if INSTITUTIONAL_V3_AVAILABLE:
+                                try:
+                                    smc = calculate_smc_structure(hist)
+                                    smc_score = smc.get('smc_score', 50.0)
+                                    smc_bias = smc.get('bias', 'Neutral')
+                                except Exception:
+                                    pass
+
                             row = {
                                 'Symbol': symbol,
-                                'Price': float(hist['Close'].iloc[-1]) if 'Close' in hist.columns else 0.0,
-                                'Volume': float(hist['Volume'].iloc[-1]) if 'Volume' in hist.columns else 0.0,
-                                'Return_7d': 0.0,
-                                'Return_30d': 0.0,
-                                'Return_90d': 0.0,
+                                'Price': last_price,
+                                'Volume': last_vol,
+                                'Return_7d': ret_7d,
+                                'Return_30d': ret_30d,
+                                'Return_90d': ret_90d,
                                 'Dilution_Risk_Score': 50.0,
-                                'Pct_From_52w_High': 0.0,
-                                'Pct_From_52w_Low': 0.0,
-                                'SMC_Bias': 'Neutral',
-                                'SMC_Score': 50.0,
+                                'Pct_From_52w_High': pct_from_high,
+                                'Pct_From_52w_Low': pct_from_low,
+                                'SMC_Bias': smc_bias,
+                                'SMC_Score': smc_score,
                                 'metal': metal_default,
                                 'Metal_Type': metal_default,
-                                'Country': 'Unknown'
+                                'Country': 'Unknown',
+                                'TA_Score': ta_results.get('ta_score', 50.0),
+                                'RSI': ta_results.get('rsi', 50.0),
+                                'MACD_Signal': ta_results.get('signal', 'NEUTRAL'),
                             }
-                            
-                            # Calculate basic returns if possible
-                            if len(hist) >= 7:
-                                row['Return_7d'] = ((hist['Close'].iloc[-1] - hist['Close'].iloc[-7]) / hist['Close'].iloc[-7] * 100) if hist['Close'].iloc[-7] > 0 else 0.0
-                            if len(hist) >= 30:
-                                row['Return_30d'] = ((hist['Close'].iloc[-1] - hist['Close'].iloc[-30]) / hist['Close'].iloc[-30] * 100) if hist['Close'].iloc[-30] > 0 else 0.0
-                            if len(hist) >= 90:
-                                row['Return_90d'] = ((hist['Close'].iloc[-1] - hist['Close'].iloc[-90]) / hist['Close'].iloc[-90] * 100) if hist['Close'].iloc[-90] > 0 else 0.0
                             
                             _log(f"Syncing {row.get('metal', 'Gold')} futures with {symbol}...")
                             # Alpha-Only Fallback: compute Alpha from price history; if FA missing, use 0 and do not skip
@@ -5117,8 +5160,17 @@ if 'results' in st.session_state:
                             # For Global Search, we skip this
                             pass
                         
-                        # Track action filter (default to HOLD for new symbols)
-                        action = row_dict.get('Action', 'HOLD')
+                        # Derive Action from scores for new candidates (not from portfolio)
+                        action = row_dict.get('Action', None)
+                        if action is None or (not in_portfolio and action == 'HOLD'):
+                            # New candidate: derive action from alpha + TA signals
+                            if alpha_score >= 65 and ta_results.get('signal', 'NEUTRAL') != 'SELL':
+                                action = 'Buy'
+                            elif alpha_score >= 50:
+                                action = 'HOLD'
+                            else:
+                                action = 'Avoid'
+                            row_dict['Action'] = action
                         if action not in ['Buy', 'HOLD']:
                             filter_failures.append(f"Action: {action} (not Buy/HOLD)")
                         
@@ -5482,7 +5534,10 @@ if 'results' in st.session_state:
             # Sort purely by Combined_Score — best algo score wins regardless of market cap
             if not actionable.empty:
                 actionable = actionable.sort_values('Combined_Score', ascending=False)
-            top_5 = actionable.head(5)
+            # Show up to 5 new discoveries + up to 5 portfolio rebalance signals
+            new_candidates = actionable[~actionable['In_Portfolio']].head(5) if 'In_Portfolio' in actionable.columns else actionable.head(5)
+            port_candidates = actionable[actionable['In_Portfolio']].head(5) if 'In_Portfolio' in actionable.columns else pd.DataFrame()
+            top_5 = pd.concat([new_candidates, port_candidates]).head(10)
         else:
             top_5 = pd.DataFrame()
             filtered_by_action = 0
@@ -5539,78 +5594,76 @@ if 'results' in st.session_state:
             else:
                 st.info("**Tip:** Enable Debug Mode above to see all stocks and which specific filters they're failing.")
         else:
-            st.success(f"Found {len(top_5)} top recommendations")
-            
-            # Display as cards
-            for idx, row in top_5.iterrows():
-                with st.container():
-                    col1, col2, col3 = st.columns([2, 2, 1])
-                    
-                    with col1:
-                        symbol = row['Symbol']
-                        # V5.0: Check if "Newly Identified" gem (Alpha > 85 and not in portfolio)
-                        is_new_signal = False
-                        in_portfolio = row.get('In_Portfolio', False)  # From Wide-Net scan
-                        if not in_portfolio:
-                            # Also check results if In_Portfolio not set
-                            if 'results' in st.session_state:
-                                results_df = st.session_state.results
-                                in_portfolio = symbol in results_df['Symbol'].values if 'Symbol' in results_df.columns else False
-                        
-                        alpha_score = row.get('Alpha_Score', 0)
-                        is_new_signal = alpha_score > 85 and not in_portfolio
-                        
-                        symbol_display = f"### {symbol}"
-                        if is_new_signal:
-                            symbol_display += " 🌟 **NEW SIGNAL**"
-                        st.markdown(symbol_display)
-                        st.metric("Combined Score", f"{row['Combined_Score']:.2f}", 
-                                 help="(Alpha + FA Score) / Risk")
-                    
-                    with col2:
-                        # V7.5: Display Market Cap and Tier for transparency
-                        market_cap_display = ""
-                        if 'Market_Cap_M' in row and pd.notna(row.get('Market_Cap_M')):
-                            mcap = row['Market_Cap_M']
-                            tier = row.get('Market_Cap_Tier', '')
-                            if tier == 'JUNIOR_MIDTIER':
-                                market_cap_display = f"💰 **${mcap:.1f}M** (Junior/Mid-Tier ⭐)"
-                            elif tier == 'HIGH_QUALITY_EXCEPTION':
-                                market_cap_display = f"💰 **${mcap:.1f}M** (High Quality Exception)"
+            # Split into New Discoveries and Portfolio Rebalance candidates
+            new_discoveries = top_5[~top_5['In_Portfolio']].copy() if 'In_Portfolio' in top_5.columns else top_5.copy()
+            portfolio_picks = top_5[top_5['In_Portfolio']].copy() if 'In_Portfolio' in top_5.columns else pd.DataFrame()
+
+            # -- New Discoveries Section --
+            if not new_discoveries.empty:
+                st.markdown("### New Discovery Candidates")
+                st.success(f"Found {len(new_discoveries)} new stock(s) not in your portfolio")
+            else:
+                st.info("No new discovery candidates found in this scan. All top picks are already in your portfolio.")
+
+            # -- Portfolio Rebalance Section --
+            if not portfolio_picks.empty:
+                st.markdown("### Portfolio Rebalance Signals")
+                st.caption(f"{len(portfolio_picks)} of your holdings ranked in the top results")
+
+            # Render both sections using the same card layout
+            for section_df, section_label in [(new_discoveries, 'new'), (portfolio_picks, 'portfolio')]:
+                for idx, row in section_df.iterrows():
+                    with st.container():
+                        col1, col2, col3 = st.columns([2, 2, 1])
+
+                        with col1:
+                            symbol = row['Symbol']
+                            in_portfolio = row.get('In_Portfolio', False)
+                            alpha_score = row.get('Alpha_Score', 0)
+
+                            symbol_display = f"### {symbol}"
+                            if not in_portfolio:
+                                symbol_display += " **NEW**"
                             else:
-                                market_cap_display = f"💰 **${mcap:.1f}M**"
-                        
-                        st.caption(f"**Alpha:** {row['Alpha_Score']:.1f} | **FA:** {row['FA_Score']:+.1f} | **Risk:** {row['Risk_Score']:.0f}")
-                        if market_cap_display:
-                            st.caption(market_cap_display)
-                        st.caption(f"**Action:** {row['Action']} ({row['Confidence']} confidence)")
-                        if row['Market_Buzz']:
-                            st.caption(f"🔥 **Market Buzz:** Volume spike {row['Volume_Spike_Pct']:.1f}%")
-                        if row.get('Market_Impact_Pct', 0) > 0:
-                            if global_opportunity_scan:
-                                st.caption(f"⚠️ **Market Impact:** {row['Market_Impact_Pct']:.2f}% (ignored in Global Scan)")
+                                symbol_display += " (owned)"
+                            st.markdown(symbol_display)
+                            st.metric("Combined Score", f"{row['Combined_Score']:.2f}",
+                                     help="(Alpha + FA Score) / Risk")
+
+                        with col2:
+                            market_cap_display = ""
+                            if 'Market_Cap_M' in row and pd.notna(row.get('Market_Cap_M')):
+                                mcap = row['Market_Cap_M']
+                                tier = row.get('Market_Cap_Tier', '')
+                                market_cap_display = f"**${mcap:,.1f}M** ({tier})" if tier else f"**${mcap:,.1f}M**"
+
+                            st.caption(f"**Alpha:** {row['Alpha_Score']:.1f} | **FA:** {row['FA_Score']:+.1f} | **Risk:** {row['Risk_Score']:.0f}")
+                            if market_cap_display:
+                                st.caption(market_cap_display)
+                            st.caption(f"**Action:** {row['Action']} ({row['Confidence']} confidence) | **Metal:** {row.get('Metal_Type', '?')}")
+                            if row.get('Price', 0) > 0:
+                                st.caption(f"**Price:** ${row['Price']:.2f}")
+                            if row['Market_Buzz']:
+                                st.caption(f"**Market Buzz:** Volume spike {row['Volume_Spike_Pct']:.1f}%")
+
+                        with col3:
+                            if row['Action'] == 'Buy':
+                                st.success("BUY")
+                            elif row['Action'] == 'HOLD':
+                                st.info("HOLD")
                             else:
-                                impact_status = "✅" if row['Passes_Impact_Gate'] else "❌"
-                                st.caption(f"{impact_status} **Market Impact:** {row['Market_Impact_Pct']:.2f}%")
-                        if row.get('Diversification_Veto', False) and global_opportunity_scan:
-                            st.caption(f"⚠️ **Diversification Veto:** {row.get('Veto_Reason', '')} (ignored in Global Scan)")
-                    
-                    with col3:
-                        if row['Action'] == 'Buy':
-                            st.success("BUY")
-                        else:
-                            st.info("HOLD")
-                        # Add to watchlist button
-                        _sym = row['Symbol']
-                        _starred = st.session_state.get('starred_symbols', [])
-                        if _sym not in _starred:
-                            if st.button("+ Watchlist", key=f"wl_add_{_sym}"):
-                                if 'starred_symbols' not in st.session_state:
-                                    st.session_state.starred_symbols = []
-                                st.session_state.starred_symbols.append(_sym)
-                                st.rerun()
-                        else:
-                            st.caption("On watchlist")
+                                st.warning(row['Action'])
+                            # Add to watchlist button
+                            _sym = row['Symbol']
+                            _starred = st.session_state.get('starred_symbols', [])
+                            if _sym not in _starred:
+                                if st.button("+ Watchlist", key=f"wl_add_{section_label}_{_sym}"):
+                                    if 'starred_symbols' not in st.session_state:
+                                        st.session_state.starred_symbols = []
+                                    st.session_state.starred_symbols.append(_sym)
+                                    st.rerun()
+                            else:
+                                st.caption("On watchlist")
 
                     # Show FA reasoning
                     if row['FA_Reasoning']:
