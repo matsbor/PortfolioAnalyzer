@@ -790,7 +790,7 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
     if ta_score_raw is not None and isinstance(ta_score_raw, (int, float)):
         ta_score = max(0, min(100, float(ta_score_raw)))
     elif hist_data is not None and not hist_data.empty and len(hist_data) >= 20:
-        # Derive TA score from price history (RSI + trend + volume)
+        # Derive TA score from price history (RSI + BB + BOS + trend + volume)
         try:
             close = hist_data['Close'].dropna()
             _ta = 50  # Start neutral
@@ -807,6 +807,30 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
                     _ta -= 10  # Overbought
                 elif _rsi > 50:
                     _ta += 5   # Bullish
+            # Bollinger Bands component
+            if len(close) >= 20:
+                _sma20 = close.rolling(20).mean()
+                _std20 = close.rolling(20).std()
+                _bb_upper = _sma20 + 2.0 * _std20
+                _bb_lower = _sma20 - 2.0 * _std20
+                _bb_mid = float(_sma20.iloc[-1])
+                _bb_u = float(_bb_upper.iloc[-1])
+                _bb_l = float(_bb_lower.iloc[-1])
+                _bb_range = _bb_u - _bb_l
+                _cur = float(close.iloc[-1])
+                if _bb_range > 0:
+                    _pct_b = (_cur - _bb_l) / _bb_range
+                    if _pct_b < 0.1:
+                        _ta += 8   # Strong oversold at lower band
+                    elif _pct_b < 0.2:
+                        _ta += 5   # Near lower band
+                    elif _pct_b > 0.9:
+                        _ta -= 8   # Strong overbought at upper band
+                    elif _pct_b > 0.8:
+                        _ta -= 5   # Near upper band
+                    # Squeeze detection
+                    if _bb_mid > 0 and _bb_range / _bb_mid < 0.05:
+                        _ta += 7   # Squeeze — breakout imminent
             # Trend component (price vs 20d MA)
             if len(close) >= 20:
                 ma20 = close.tail(20).mean()
@@ -814,6 +838,24 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
                     _ta += 10
                 elif close.iloc[-1] < ma20 * 0.97:
                     _ta -= 10
+            # BOS / Market structure component
+            if len(hist_data) >= 50 and 'High' in hist_data.columns and 'Low' in hist_data.columns:
+                _df = hist_data.tail(100).copy().reset_index(drop=True)
+                _sh, _sl = [], []
+                for _i in range(5, len(_df) - 5):
+                    if _df['High'].iloc[_i] == _df['High'].iloc[_i - 5:_i + 6].max():
+                        _sh.append(float(_df['High'].iloc[_i]))
+                    if _df['Low'].iloc[_i] == _df['Low'].iloc[_i - 5:_i + 6].min():
+                        _sl.append(float(_df['Low'].iloc[_i]))
+                if len(_sh) >= 3 and len(_sl) >= 3:
+                    _hh = _sh[-1] > _sh[-2] > _sh[-3]
+                    _hl = _sl[-1] > _sl[-2] > _sl[-3]
+                    _lh = _sh[-1] < _sh[-2] < _sh[-3]
+                    _ll = _sl[-1] < _sl[-2] < _sl[-3]
+                    if _hh and _hl:
+                        _ta += 6   # Bullish structure
+                    elif _lh and _ll:
+                        _ta -= 6   # Bearish structure
             # Volume trend (rising volume on up days)
             if 'Volume' in hist_data.columns and len(hist_data) >= 10:
                 recent = hist_data.tail(10)
@@ -830,7 +872,7 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
         ta_score = 50
 
     models['M10_TA'] = ta_score * 0.08
-    breakdown.append(f"M10 TA: {ta_score:.0f}/100 x 8% = {models['M10_TA']:.1f} (RSI/MACD/BB/OBV/ADX)")
+    breakdown.append(f"M10 TA: {ta_score:.0f}/100 x 8% = {models['M10_TA']:.1f} (RSI/BB/BOS/Trend/Volume)")
 
     # === M11: Fundamental Analysis Score (10%) ================================
     # Uses pre-computed FA_Score from calculate_fundamental_score()
@@ -1237,6 +1279,76 @@ def calculate_sell_risk(row, hist_data, ma50, ma200, news_items, macro_regime):
                     score += 10
                     soft_triggers.append("⚠️ Volume distribution (heavy selling)")
         except (IndexError, KeyError):
+            pass
+
+    # Bollinger Band breakdown: price below lower band = institutional selling pressure
+    if hist_data is not None and len(hist_data) >= 20 and 'Close' in hist_data.columns:
+        try:
+            _close = hist_data['Close'].dropna()
+            if len(_close) >= 20:
+                _sma20 = _close.rolling(20).mean()
+                _std20 = _close.rolling(20).std()
+                _bb_lower = _sma20 - 2.0 * _std20
+                _bb_upper = _sma20 + 2.0 * _std20
+                _bb_l_val = float(_bb_lower.iloc[-1])
+                _bb_u_val = float(_bb_upper.iloc[-1])
+                _bb_range = _bb_u_val - _bb_l_val
+                _cur_price = float(_close.iloc[-1])
+                if _bb_range > 0:
+                    _pct_b = (_cur_price - _bb_l_val) / _bb_range
+                    if _pct_b < 0.0:
+                        # Price below lower Bollinger Band
+                        score += 10
+                        soft_triggers.append(f"⚠️ Price below lower Bollinger Band (%B={_pct_b:.2f})")
+                    elif _pct_b < 0.1:
+                        score += 5
+                        soft_triggers.append(f"⚠️ Price near lower Bollinger Band (%B={_pct_b:.2f})")
+                    # BB lower band-walk: 3+ consecutive closes near lower band
+                    if len(_bb_lower) >= 5:
+                        _bw_count = 0
+                        for _bi in range(-3, 0):
+                            _bl = float(_bb_lower.iloc[_bi])
+                            _bu = float(_bb_upper.iloc[_bi])
+                            _br = _bu - _bl
+                            _bc = float(_close.iloc[_bi])
+                            if _br > 0 and (_bc - _bl) / _br < 0.15:
+                                _bw_count += 1
+                        if _bw_count >= 3:
+                            score += 8
+                            soft_triggers.append("⚠️ BB lower band-walk (3+ bars at lower band)")
+        except (IndexError, KeyError, ValueError):
+            pass
+
+    # Bearish BOS / CHoCH detection: structural breakdown as sell trigger
+    if hist_data is not None and len(hist_data) >= 50 and 'High' in hist_data.columns and 'Low' in hist_data.columns:
+        try:
+            _df = hist_data.tail(100).copy().reset_index(drop=True)
+            _sh, _sl = [], []
+            for _i in range(5, len(_df) - 5):
+                if _df['High'].iloc[_i] == _df['High'].iloc[_i - 5:_i + 6].max():
+                    _sh.append(float(_df['High'].iloc[_i]))
+                if _df['Low'].iloc[_i] == _df['Low'].iloc[_i - 5:_i + 6].min():
+                    _sl.append(float(_df['Low'].iloc[_i]))
+            if len(_sh) >= 3 and len(_sl) >= 3:
+                _lh = _sh[-1] < _sh[-2] < _sh[-3]
+                _ll = _sl[-1] < _sl[-2] < _sl[-3]
+                _hh = _sh[-1] > _sh[-2] > _sh[-3]
+                _hl = _sl[-1] > _sl[-2] > _sl[-3]
+                _cur_p = float(_df['Close'].iloc[-1])
+                if _lh and _ll:
+                    # Bearish structure: LH + LL
+                    score += 8
+                    soft_triggers.append("⚠️ Bearish market structure (Lower Highs + Lower Lows)")
+                    # Bearish BOS: price broke below last swing low
+                    if _cur_p < _sl[-1] * 0.985:
+                        score += 7
+                        soft_triggers.append("⚠️ Bearish BOS (price below last swing low)")
+                elif _hh and _hl:
+                    # Bullish structure breaking down (CHoCH)
+                    if _cur_p < _sl[-1] * 0.985:
+                        score += 10
+                        soft_triggers.append("⚠️ CHoCH ↓ (bullish structure broken — reversal)")
+        except (IndexError, KeyError, ValueError):
             pass
 
     # Volatility Harvesting: Ignore RSI overbought signals if SMC_Bias is strongly BULLISH

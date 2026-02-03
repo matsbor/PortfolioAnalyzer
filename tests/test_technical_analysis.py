@@ -370,6 +370,7 @@ class TestCalculateAllTA:
             "stochastic",
             "cci",
             "atr",
+            "market_structure",
             "ta_signal",
             "ta_score",
             "ta_reasons",

@@ -632,7 +632,115 @@ def calculate_atr(
 
 
 # ---------------------------------------------------------------------------
-# 10. Composite Analysis
+# 10. Market Structure (BOS) Analysis
+# ---------------------------------------------------------------------------
+
+def calculate_market_structure(hist: pd.DataFrame) -> dict:
+    """Detect Break of Structure (BOS) and Change of Character (CHoCH).
+
+    Uses 5-bar swing pivots on the last 100 bars to classify market
+    structure as bullish (HH+HL), bearish (LH+LL), or ranging.
+
+    Args:
+        hist: OHLCV DataFrame with ``High``, ``Low``, and ``Close``
+              columns.
+
+    Returns:
+        A dictionary with keys:
+
+        * ``structure`` -- ``'BULLISH'``, ``'BEARISH'``, or ``'RANGING'``.
+        * ``event`` -- ``'BOS_UP'``, ``'BOS_DOWN'``, ``'CHOCH_UP'``,
+          ``'CHOCH_DOWN'``, or ``'NONE'``.
+        * ``confidence`` -- 0--100 score.
+        * ``last_swing_high``, ``last_swing_low`` -- float prices.
+    """
+    default = {
+        'structure': 'RANGING',
+        'event': 'NONE',
+        'confidence': 50,
+        'last_swing_high': np.nan,
+        'last_swing_low': np.nan,
+    }
+    if not _validate_hist(hist, min_rows=50,
+                          required_cols=['High', 'Low', 'Close']):
+        return default
+
+    df = hist.tail(100).copy().reset_index(drop=True)
+
+    # Identify swing points (5-bar pivots)
+    swing_highs = []
+    swing_lows = []
+    for i in range(5, len(df) - 5):
+        if df['High'].iloc[i] == df['High'].iloc[i - 5:i + 6].max():
+            swing_highs.append(float(df['High'].iloc[i]))
+        if df['Low'].iloc[i] == df['Low'].iloc[i - 5:i + 6].min():
+            swing_lows.append(float(df['Low'].iloc[i]))
+
+    if len(swing_highs) < 3 or len(swing_lows) < 3:
+        return default
+
+    rh = swing_highs[-3:]
+    rl = swing_lows[-3:]
+    hh = rh[2] > rh[1] > rh[0]
+    hl = rl[2] > rl[1] > rl[0]
+    lh = rh[2] < rh[1] < rh[0]
+    ll = rl[2] < rl[1] < rl[0]
+
+    last_sh = swing_highs[-1]
+    last_sl = swing_lows[-1]
+    current = float(df['Close'].iloc[-1])
+
+    # ATR-based BOS buffer
+    confidence = 50
+    if len(df) >= 15 and current > 0:
+        _tr = pd.concat([
+            df['High'] - df['Low'],
+            (df['High'] - df['Close'].shift(1)).abs(),
+            (df['Low'] - df['Close'].shift(1)).abs(),
+        ], axis=1).max(axis=1)
+        atr14 = float(_tr.ewm(alpha=1 / 14, adjust=False).mean().iloc[-1])
+        bos_buf = max(0.01, min(0.04, 0.5 * atr14 / current))
+    else:
+        bos_buf = 0.015
+
+    bullish = hh and hl
+    bearish = lh and ll
+    structure = 'RANGING'
+    event = 'NONE'
+
+    if bullish:
+        structure = 'BULLISH'
+        confidence += 15
+        if current > last_sh * (1.0 + bos_buf):
+            event = 'BOS_UP'
+            confidence += 10
+    elif bearish:
+        structure = 'BEARISH'
+        confidence -= 15
+        if current < last_sl * (1.0 - bos_buf):
+            event = 'BOS_DOWN'
+            confidence -= 10
+
+    # CHoCH detection
+    if event == 'NONE':
+        if bullish and current < last_sl * (1.0 - bos_buf):
+            event = 'CHOCH_DOWN'
+            confidence = 35
+        elif bearish and current > last_sh * (1.0 + bos_buf):
+            event = 'CHOCH_UP'
+            confidence = 35
+
+    return {
+        'structure': structure,
+        'event': event,
+        'confidence': int(np.clip(confidence, 0, 100)),
+        'last_swing_high': last_sh,
+        'last_swing_low': last_sl,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 11. Composite Analysis
 # ---------------------------------------------------------------------------
 
 def calculate_all_ta(hist: pd.DataFrame) -> dict:
@@ -689,6 +797,7 @@ def calculate_all_ta(hist: pd.DataFrame) -> dict:
     stoch_result = calculate_stochastic(hist)
     cci_result = calculate_cci(hist)
     atr_result = calculate_atr(hist)
+    structure_result = calculate_market_structure(hist)
 
     # Package RSI into a dict with both scalar and series
     rsi_current = np.nan
@@ -749,13 +858,25 @@ def calculate_all_ta(hist: pd.DataFrame) -> dict:
                     "MACD histogram positive and rising: +5"
                 )
 
-    # Bollinger Bands contribution
+    # Bollinger Bands contribution (enhanced with band-walk detection)
     pct_b = bollinger_result['pct_b']
     if not np.isnan(pct_b):
-        if pct_b < 0.2:
+        if pct_b < 0.05:
+            # Extreme: price below lower band — strong oversold
+            adjustment += 8
+            reasons.append(
+                f"Price below lower Bollinger Band (%B={pct_b:.2f}): +8"
+            )
+        elif pct_b < 0.2:
             adjustment += 5
             reasons.append(
                 f"Price near lower Bollinger Band (%B={pct_b:.2f}): +5"
+            )
+        elif pct_b > 0.95:
+            # Extreme: price above upper band — strong overbought
+            adjustment -= 8
+            reasons.append(
+                f"Price above upper Bollinger Band (%B={pct_b:.2f}): -8"
             )
         elif pct_b > 0.8:
             adjustment -= 5
@@ -768,6 +889,68 @@ def calculate_all_ta(hist: pd.DataFrame) -> dict:
         reasons.append(
             "Bollinger Band squeeze detected (potential breakout): +10"
         )
+
+    # Band-walk detection: sustained trending at upper or lower band (3+ bars)
+    bb_upper_s = bollinger_result.get('upper_series')
+    bb_lower_s = bollinger_result.get('lower_series')
+    if (isinstance(bb_upper_s, pd.Series) and isinstance(bb_lower_s, pd.Series)
+            and len(bb_upper_s) >= 5 and len(hist) >= 5):
+        try:
+            band_walk_bars = 0
+            band_walk_dir = 'none'
+            close_vals = hist['Close']
+            for offset in range(-3, 0):
+                u = float(bb_upper_s.iloc[offset])
+                l = float(bb_lower_s.iloc[offset])
+                c = float(close_vals.iloc[offset])
+                bw = u - l
+                if bw > 0:
+                    local_pctb = (c - l) / bw
+                    if local_pctb > 0.8:
+                        if band_walk_dir in ('none', 'upper'):
+                            band_walk_dir = 'upper'
+                            band_walk_bars += 1
+                    elif local_pctb < 0.2:
+                        if band_walk_dir in ('none', 'lower'):
+                            band_walk_dir = 'lower'
+                            band_walk_bars += 1
+            if band_walk_bars >= 3 and band_walk_dir == 'upper':
+                adjustment += 6
+                reasons.append(
+                    f"BB upper band-walk ({band_walk_bars} bars): +6 (bullish trend)"
+                )
+            elif band_walk_bars >= 3 and band_walk_dir == 'lower':
+                adjustment -= 6
+                reasons.append(
+                    f"BB lower band-walk ({band_walk_bars} bars): -6 (bearish trend)"
+                )
+        except (IndexError, ValueError):
+            pass
+
+    # Bollinger bandwidth expansion: rapid widening signals increased volatility
+    bw = bollinger_result.get('bandwidth', np.nan)
+    if not np.isnan(bw) and isinstance(bb_upper_s, pd.Series) and len(bb_upper_s) >= 10:
+        try:
+            mid_s = bollinger_result.get('middle_series')
+            if isinstance(mid_s, pd.Series) and len(mid_s) >= 10:
+                prev_bw_vals = []
+                for offset in range(-10, -3):
+                    u = float(bb_upper_s.iloc[offset])
+                    l = float(bb_lower_s.iloc[offset])
+                    m = float(mid_s.iloc[offset])
+                    if m > 0:
+                        prev_bw_vals.append((u - l) / m)
+                if prev_bw_vals:
+                    avg_prev_bw = sum(prev_bw_vals) / len(prev_bw_vals)
+                    if avg_prev_bw > 0 and bw > avg_prev_bw * 1.8:
+                        # Bandwidth expanding fast — volatility spike
+                        adjustment *= 0.85
+                        reasons.append(
+                            f"BB bandwidth expanding ({bw:.3f} vs avg {avg_prev_bw:.3f}): "
+                            f"signals dampened 0.85"
+                        )
+        except (IndexError, ValueError):
+            pass
 
     # OBV contribution
     if obv_result['obv_divergence'] == 'bullish':
@@ -807,6 +990,36 @@ def calculate_all_ta(hist: pd.DataFrame) -> dict:
             f"Extreme volatility (ATR {atr_result['atr_pct']:.1f}%): "
             f"signals dampened by 0.7"
         )
+
+    # Market Structure (BOS/CHoCH) contribution
+    struct = structure_result['structure']
+    struct_event = structure_result['event']
+    if struct_event == 'BOS_UP':
+        adjustment += 10
+        reasons.append(
+            f"Bullish Break of Structure (BOS ↑): +10"
+        )
+    elif struct_event == 'BOS_DOWN':
+        adjustment -= 10
+        reasons.append(
+            f"Bearish Break of Structure (BOS ↓): -10"
+        )
+    elif struct_event == 'CHOCH_UP':
+        adjustment += 6
+        reasons.append(
+            f"Change of Character bullish (CHoCH ↑): +6"
+        )
+    elif struct_event == 'CHOCH_DOWN':
+        adjustment -= 6
+        reasons.append(
+            f"Change of Character bearish (CHoCH ↓): -6"
+        )
+    elif struct == 'BULLISH':
+        adjustment += 4
+        reasons.append("Bullish market structure (HH+HL): +4")
+    elif struct == 'BEARISH':
+        adjustment -= 4
+        reasons.append("Bearish market structure (LH+LL): -4")
 
     # ADX multiplier (applied to the aggregate adjustment)
     adx_val = adx_result['adx']
@@ -850,6 +1063,7 @@ def calculate_all_ta(hist: pd.DataFrame) -> dict:
         'stochastic': stoch_result,
         'cci': cci_result,
         'atr': atr_result,
+        'market_structure': structure_result,
         'ta_signal': ta_signal,
         'ta_score': ta_score,
         'ta_reasons': reasons,
