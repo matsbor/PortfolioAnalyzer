@@ -161,10 +161,14 @@ try:
     YFINANCE = True
     if 'yfinance_available' not in st.session_state:
         st.session_state.yfinance_available = True
+    # Suppress "possibly delisted" warnings globally — expected for mining portfolio
+    # scanning where many tickers are checked and some may be delisted.
+    import warnings
+    warnings.filterwarnings("ignore", message=".*possibly delisted.*")
 except Exception:
     YFINANCE = False
     st.session_state.yfinance_available = False
-    st.error("⚠️ yfinance not installed. Run: pip install yfinance")
+    st.error("yfinance not installed. Run: pip install yfinance")
 
 # Tiingo REST client (ticker search / fetch_ticker_with_fallback)
 try:
@@ -942,7 +946,10 @@ def fetch_ticker_with_fallback(symbol: str, period: str = "1y", is_canadian: boo
                         flat = len(tail) >= 3 and (tail.nunique() <= 1 or (tail.std() or 0) == 0)
                         if flat and YFINANCE:
                             try:
-                                yf_hist = yf.Ticker(variant).history(period="5d")
+                                import warnings
+                                with warnings.catch_warnings():
+                                    warnings.filterwarnings("ignore", message=".*possibly delisted.*")
+                                    yf_hist = yf.Ticker(variant).history(period="5d")
                                 if not yf_hist.empty and "Close" in yf_hist.columns:
                                     for c in ("Open", "High", "Low", "Close", "Volume"):
                                         if c not in yf_hist.columns:
@@ -1626,93 +1633,101 @@ def get_sovereign_spot_prices() -> dict:
     # V7.4: Yahoo has delisted XAGUSD=X, so we use Futures Tickers as secondary source
     # V7.4: Stop 404s - If API returns 404 or "delisted" error, immediately default to Mats Sovereign Floor
     if YFINANCE:
+        import warnings
         try:
             # Gold futures (GC=F) - Secondary fallback if primary failed
             if not np.isfinite(gold_primary):
-                gc = yf.Ticker("GC=F")
-                gc_hist = gc.history(period="1d")
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=UserWarning)
+                    warnings.filterwarnings("ignore", message=".*possibly delisted.*")
+                    gc = yf.Ticker("GC=F")
+                    gc_hist = gc.history(period="1d")
                 if not gc_hist.empty and "Close" in gc_hist.columns:
                     gold_secondary = float(gc_hist["Close"].iloc[-1])
                     if out['price_source'] == 'unknown':
                         out['price_source'] = 'yfinance_futures_secondary'
                 else:
-                    # Empty history = likely delisted/404 - default to Mats Floor
                     gold_secondary = GOLD_VERIFIED_FRIDAY_CLOSE
                     if out['price_source'] == 'unknown':
                         out['price_source'] = 'mats_floor_fallback'
         except Exception:
-            # 404 or delisted error - immediately default to Mats Floor
             if not np.isfinite(gold_primary):
                 gold_secondary = GOLD_VERIFIED_FRIDAY_CLOSE
-        
+
         try:
             # Silver futures (SI=F) - Secondary fallback if primary failed
             if not np.isfinite(silver_primary):
-                si = yf.Ticker("SI=F")
-                si_hist = si.history(period="1d")
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=UserWarning)
+                    warnings.filterwarnings("ignore", message=".*possibly delisted.*")
+                    si = yf.Ticker("SI=F")
+                    si_hist = si.history(period="1d")
                 if not si_hist.empty and "Close" in si_hist.columns:
                     silver_secondary = float(si_hist["Close"].iloc[-1])
                     if out['price_source'] == 'unknown':
                         out['price_source'] = 'yfinance_futures_secondary'
                 else:
-                    # Empty history = likely delisted/404 - default to Mats Floor
                     silver_secondary = SILVER_VERIFIED_FRIDAY_CLOSE
                     if out['price_source'] == 'unknown':
                         out['price_source'] = 'mats_floor_fallback'
         except Exception:
-            # 404 or delisted error - immediately default to Mats Floor
             if not np.isfinite(silver_primary):
                 silver_secondary = SILVER_VERIFIED_FRIDAY_CLOSE
-        
+
         try:
             # Uranium futures (UX=F) or U-U.TO (Sprott Physical Trust) - Secondary fallback
             if not np.isfinite(uranium_spot):
-                ux = yf.Ticker("UX=F")
-                ux_hist = ux.history(period="1d")
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=UserWarning)
+                    warnings.filterwarnings("ignore", message=".*possibly delisted.*")
+                    ux = yf.Ticker("UX=F")
+                    ux_hist = ux.history(period="1d")
                 if not ux_hist.empty and "Close" in ux_hist.columns:
                     uranium_spot = float(ux_hist["Close"].iloc[-1])
                 else:
-                    # Try U-U.TO (Sprott Physical Uranium Trust)
                     try:
-                        uu = yf.Ticker("U-U.TO")
-                        uu_hist = uu.history(period="1d")
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings("ignore", category=UserWarning)
+                            warnings.filterwarnings("ignore", message=".*possibly delisted.*")
+                            uu = yf.Ticker("U-U.TO")
+                            uu_hist = uu.history(period="1d")
                         if not uu_hist.empty and "Close" in uu_hist.columns:
                             uranium_spot = float(uu_hist["Close"].iloc[-1])
                         else:
-                            # Empty history = likely delisted/404 - default to Mats Floor
                             uranium_spot = URANIUM_VERIFIED_FRIDAY_CLOSE
                     except Exception:
-                        # 404 or delisted error - immediately default to Mats Floor
                         uranium_spot = URANIUM_VERIFIED_FRIDAY_CLOSE
         except Exception:
-            # 404 or delisted error - immediately default to Mats Floor
             if not np.isfinite(uranium_spot):
                 uranium_spot = URANIUM_VERIFIED_FRIDAY_CLOSE
-    
+
     # V7.4: TERTIARY - ETF proxies with spot multiplier (SLV * 1.1, GLD for institutional floor)
     if YFINANCE:
         try:
-            # GLD (Gold ETF) - use as-is for institutional floor
-            gld = yf.Ticker("GLD")
-            gld_hist = gld.history(period="1d")
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=UserWarning)
+                warnings.filterwarnings("ignore", message=".*possibly delisted.*")
+                # GLD (Gold ETF) - use as-is for institutional floor
+                gld = yf.Ticker("GLD")
+                gld_hist = gld.history(period="1d")
             if not gld_hist.empty and "Close" in gld_hist.columns:
                 gld_price = float(gld_hist["Close"].iloc[-1])
-                # GLD price is per share, need to convert to oz (GLD ~0.1 oz per share)
-                gold_tertiary = gld_price * 10.0  # Approximate conversion
+                gold_tertiary = gld_price * 10.0  # Approximate: GLD ~0.1 oz per share
                 if out['price_source'] == 'unknown':
                     out['price_source'] = 'yfinance_etf'
         except Exception:
             pass
-        
+
         try:
-            # SLV (Silver ETF) - apply 1.1x multiplier for institutional floor
-            slv = yf.Ticker("SLV")
-            slv_hist = slv.history(period="1d")
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=UserWarning)
+                warnings.filterwarnings("ignore", message=".*possibly delisted.*")
+                # SLV (Silver ETF) - apply 1.1x multiplier for institutional floor
+                slv = yf.Ticker("SLV")
+                slv_hist = slv.history(period="1d")
             if not slv_hist.empty and "Close" in slv_hist.columns:
                 slv_price = float(slv_hist["Close"].iloc[-1])
-                # SLV price is per share, need to convert to oz (SLV ~1 oz per share)
-                # Apply 1.1x multiplier to find institutional floor
-                silver_tertiary = slv_price * 1.1
+                silver_tertiary = slv_price * 1.1  # SLV ~1 oz per share
                 if out['price_source'] == 'unknown':
                     out['price_source'] = 'yfinance_etf'
         except Exception:
@@ -1788,9 +1803,9 @@ def get_sovereign_spot_prices() -> dict:
 def get_global_commodity_benchmarks() -> dict:
     """Fetch live commodity prices from Tiingo/yfinance.
 
-    All prices are pulled live. Shanghai premiums are estimated from
-    the ratio of SGE ETF (SGOL, SIVR) vs COMEX spot when available,
-    otherwise set to 0 (no premium assumed).
+    Returns COMEX gold, silver, and uranium spot prices.
+    Shanghai premium fields are kept for backward compatibility but
+    default to COMEX values (no free SGE data source available).
     """
     out = {
         "gold_comx": np.nan,
@@ -1822,20 +1837,10 @@ def get_global_commodity_benchmarks() -> dict:
         if np.isfinite(live_prices.get('uranium_spot', np.nan)):
             out["uranium_spot"] = live_prices['uranium_spot']
 
-        # Shanghai premium — estimate from GLD vs SGOL ETF spread if available
-        # Otherwise leave at 0 (no assumed premium)
-        sge_gold_premium = live_prices.get('sge_gold_premium_usd', np.nan)
-        if np.isfinite(sge_gold_premium) and np.isfinite(out["gold_comx"]) and out["gold_comx"] > 0:
-            out["gold_shanghai"] = out["gold_comx"] + sge_gold_premium
-            out["sge_premium_pct"] = (sge_gold_premium / out["gold_comx"]) * 100.0
-        elif np.isfinite(out["gold_comx"]):
-            out["gold_shanghai"] = out["gold_comx"]  # No premium data = no assumed premium
-
-        sge_silver_premium = live_prices.get('sge_silver_premium_usd', np.nan)
-        if np.isfinite(sge_silver_premium) and np.isfinite(out["silver_comx"]) and out["silver_comx"] > 0:
-            out["silver_shanghai"] = out["silver_comx"] + sge_silver_premium
-            out["shanghai_physical_premium_pct"] = (sge_silver_premium / out["silver_comx"]) * 100.0
-        elif np.isfinite(out["silver_comx"]):
+        # Shanghai defaults to COMEX (no free SGE data source)
+        if np.isfinite(out["gold_comx"]):
+            out["gold_shanghai"] = out["gold_comx"]
+        if np.isfinite(out["silver_comx"]):
             out["silver_shanghai"] = out["silver_comx"]
 
         out["ok"] = np.isfinite(out["gold_comx"]) or np.isfinite(out["silver_comx"]) or np.isfinite(out["uranium_spot"])
@@ -2178,72 +2183,50 @@ with st.sidebar:
     else:
         st.caption("Run analysis to see status")
     
-    # V7.3: Shanghai Arbitrage Premium Display
+    # V7.5: Live Metal Prices Display (replaced dead Shanghai premium section)
     st.markdown("---")
-    st.markdown("### Shanghai Arbitrage Premium")
+    st.markdown("### Live Metal Prices")
     benchmarks = get_global_commodity_benchmarks()
     live_prices = get_sovereign_spot_prices()
-    
+
     if benchmarks.get('ok', False):
+        gold_comx = benchmarks.get('gold_comx', np.nan)
+        silver_comx = benchmarks.get('silver_comx', np.nan)
+        price_source = live_prices.get('price_source', 'unknown')
+
         col1, col2 = st.columns(2)
-        
         with col1:
-            gold_comx = benchmarks.get('gold_comx', np.nan)
-            gold_shanghai = benchmarks.get('gold_shanghai', np.nan)
-            gold_premium = gold_shanghai - gold_comx if np.isfinite(gold_shanghai) and np.isfinite(gold_comx) else np.nan
-            if np.isfinite(gold_premium):
-                st.metric("Gold SGE Premium", f"+${gold_premium:.2f}",
-                         f"US: ${gold_comx:,.0f} -> SH: ${gold_shanghai:,.0f}")
+            if np.isfinite(gold_comx):
+                st.metric("Gold", f"${gold_comx:,.2f}/oz")
             else:
-                st.metric("Gold SGE Premium", "N/A", "Live data unavailable")
-        
+                st.metric("Gold", "N/A", "Data unavailable")
         with col2:
-            silver_comx = benchmarks.get('silver_comx', np.nan)
-            silver_shanghai = benchmarks.get('silver_shanghai', np.nan)
-            silver_premium = silver_shanghai - silver_comx if np.isfinite(silver_shanghai) and np.isfinite(silver_comx) else np.nan
-            if np.isfinite(silver_premium):
-                st.metric("Silver SGE Premium", f"+${silver_premium:.2f}",
-                         f"US: ${silver_comx:.2f} -> SH: ${silver_shanghai:.2f}")
+            if np.isfinite(silver_comx):
+                st.metric("Silver", f"${silver_comx:.2f}/oz")
             else:
-                st.metric("Silver SGE Premium", "N/A", "Live data unavailable")
-        
-        # V7.3: Live price indicator
+                st.metric("Silver", "N/A", "Data unavailable")
+
+        # Source + live indicator
+        source_label = price_source.replace('_', ' ').title() if price_source != 'unknown' else 'Unavailable'
         if live_prices.get('gold_use_live', False) or live_prices.get('silver_use_live', False):
             delta_pct = live_prices.get('live_delta_pct', 0)
-            st.info(f"⚡ **Live Prices Active** (Δ {delta_pct:.2f}% vs EOD)")
-        
-        # V7.4: "Great Divorce" Row - Compare US close vs Shanghai physical
-        shanghai_physical_price = benchmarks.get('shanghai_physical_price', np.nan)
-        shanghai_physical_premium_pct = benchmarks.get('shanghai_physical_premium_pct', np.nan)
-        if np.isfinite(shanghai_physical_price) and np.isfinite(silver_comx):
-            st.markdown("---")
-            st.markdown("### Great Divorce")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("🇺🇸 US Close", f"${silver_comx:.2f}")
-            with col2:
-                st.metric("🇨🇳 Shanghai Physical", f"${shanghai_physical_price:.2f}")
-            with col3:
-                premium_display = f"+{shanghai_physical_premium_pct:.2f}%" if shanghai_physical_premium_pct > 0 else f"{shanghai_physical_premium_pct:.2f}%"
-                if shanghai_physical_premium_pct > 3.0:
-                    st.error(f"🚨 **Physical Scarcity**\n{premium_display}")
-                    st.session_state['physical_scarcity_active'] = True
-                else:
-                    st.info(f"Premium: {premium_display}")
-                    st.session_state['physical_scarcity_active'] = False
-    
-    # V7.3: Energy Regime (Uranium)
+            st.caption(f"Source: {source_label} | Live (delta {delta_pct:.2f}% vs EOD)")
+        else:
+            st.caption(f"Source: {source_label}")
+    else:
+        st.caption("Metal prices unavailable")
+
+    # V7.5: Energy Regime (Uranium)
     st.markdown("---")
     st.markdown("### Energy Regime")
     uranium_spot = benchmarks.get('uranium_spot', np.nan)
     if np.isfinite(uranium_spot):
-        st.metric("☢️ Uranium Spot", f"${uranium_spot:.2f}/lb", 
-                 "Weighting CCJ, NXE, DNN, URR")
-        # Show uranium-weighted stocks
-        uranium_stocks = ['CCJ', 'NXE', 'DNN', 'URR', 'URA']
+        st.metric("Uranium Spot", f"${uranium_spot:.2f}/lb",
+                 "Weighting CCJ, NXE, DNN, URA")
+        uranium_stocks = ['CCJ', 'NXE', 'DNN', 'UEC', 'UUUU', 'URA']
         st.caption(f"Uranium exposure: {', '.join(uranium_stocks)}")
     else:
-        st.metric("☢️ Uranium Spot", "$88.75/lb", "Using 2026 benchmark")
+        st.metric("Uranium Spot", f"${85.0:.2f}/lb", "Floor estimate (live unavailable)")
     
     st.markdown("---")
     
@@ -2707,8 +2690,11 @@ with st.sidebar:
                                     # Fetch Gold/Silver prices for comparison
                                     try:
                                         import yfinance as yf
-                                        gold = yf.Ticker("GC=F").history(period="1y")
-                                        silver = yf.Ticker("SI=F").history(period="1y")
+                                        import warnings as _w
+                                        with _w.catch_warnings():
+                                            _w.filterwarnings("ignore", message=".*possibly delisted.*")
+                                            gold = yf.Ticker("GC=F").history(period="1y")
+                                            silver = yf.Ticker("SI=F").history(period="1y")
                                         
                                         # Normalize to percentage change
                                         if not gold.empty and not silver.empty:
@@ -3045,7 +3031,10 @@ if st.button("Run Portfolio Analysis", type="primary", use_container_width=True)
         for idx, row in df.iterrows():
             if YFINANCE and not replay_mode:
                 try:
-                    hist = yf.Ticker(row['Symbol']).history(period="2y")
+                    import warnings as _w
+                    with _w.catch_warnings():
+                        _w.filterwarnings("ignore", message=".*possibly delisted.*")
+                        hist = yf.Ticker(row['Symbol']).history(period="2y")
                     if not hist.empty:
                         hist_cache[row['Symbol']] = hist
                         
@@ -4862,8 +4851,8 @@ if 'results' in st.session_state:
                             # Classify metal from symbol name or known uranium tickers
                             sym_upper = symbol.upper().replace('.TO', '').replace('.V', '')
                             # TODO: derive metal type from fundamentals/sector instead of hardcoded sets
-                            uranium_syms = {'NXE', 'CCJ', 'DNN', 'URR', 'UEC', 'UUUU', 'URG', 'EU', 'PEN',
-                                            'FIND', 'EFR', 'PDN'}
+                            uranium_syms = {'NXE', 'CCJ', 'DNN', 'UEC', 'UUUU', 'URG', 'EU',
+                                            'EFR', 'PDN'}
                             silver_syms = {'AG', 'PAAS', 'EXK', 'HL', 'SIL', 'SILJ', 'FR', 'SSRM',
                                            'FSM', 'CDE', 'SVM', 'SAND'}
                             if sym_upper in uranium_syms:
