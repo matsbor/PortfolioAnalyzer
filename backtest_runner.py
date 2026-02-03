@@ -3786,6 +3786,195 @@ def _run_single_backtest(args, execution_variance: float = 0.0,
             'realism_score': 0.0
         }
 
+# ---------------------------------------------------------------------------
+# Discovery Candidate Validation (Backtest-based)
+# ---------------------------------------------------------------------------
+
+def backtest_validate_candidate(
+    symbol: str,
+    hist: pd.DataFrame,
+    lookback_days: int = 120,
+    hold_period: int = 20,
+    initial_cash: float = 10000.0,
+) -> dict:
+    """Quick walk-forward validation for a discovery candidate.
+
+    Simulates rolling buy-and-hold entries over the lookback window:
+    every ``hold_period`` days, enter a position and measure the return
+    after ``hold_period`` days. This gives a realistic win-rate and
+    average return that accounts for entry timing variance.
+
+    Parameters
+    ----------
+    symbol : str
+        Ticker symbol.
+    hist : pd.DataFrame
+        OHLCV data (at least ``lookback_days`` rows).
+    lookback_days : int
+        How many days of history to validate over.
+    hold_period : int
+        Days to hold each simulated entry.
+    initial_cash : float
+        Notional cash for each simulated trade.
+
+    Returns
+    -------
+    dict
+        {symbol, n_trades, win_rate, avg_return, best_return, worst_return,
+         max_drawdown, sharpe_ratio, signal_quality, passed}
+    """
+    result = {
+        'symbol': symbol,
+        'n_trades': 0,
+        'win_rate': 0.0,
+        'avg_return': 0.0,
+        'best_return': 0.0,
+        'worst_return': 0.0,
+        'max_drawdown': 0.0,
+        'sharpe_ratio': 0.0,
+        'signal_quality': 0.0,
+        'passed': False,
+        'detail': '',
+    }
+
+    if hist is None or hist.empty or 'Close' not in hist.columns:
+        result['detail'] = 'No data'
+        return result
+
+    close = hist['Close'].dropna()
+    if len(close) < lookback_days:
+        result['detail'] = f'Insufficient data ({len(close)} < {lookback_days})'
+        return result
+
+    window = close.tail(lookback_days).values
+
+    # Simulate rolling entries
+    returns = []
+    for entry_idx in range(0, len(window) - hold_period, max(hold_period // 2, 5)):
+        entry_price = window[entry_idx]
+        exit_price = window[entry_idx + hold_period]
+        if entry_price > 0:
+            ret = (exit_price / entry_price - 1) * 100
+            returns.append(ret)
+
+    if not returns:
+        result['detail'] = 'No valid trade windows'
+        return result
+
+    returns_arr = np.array(returns)
+    n_trades = len(returns_arr)
+    wins = int((returns_arr > 0).sum())
+
+    result['n_trades'] = n_trades
+    result['win_rate'] = round(wins / n_trades * 100, 1)
+    result['avg_return'] = round(float(returns_arr.mean()), 2)
+    result['best_return'] = round(float(returns_arr.max()), 2)
+    result['worst_return'] = round(float(returns_arr.min()), 2)
+
+    # Max drawdown over the full window
+    cummax = np.maximum.accumulate(window)
+    dd = (window - cummax) / cummax * 100
+    result['max_drawdown'] = round(float(dd.min()), 2)
+
+    # Sharpe-like ratio from the trade returns
+    mean_r = float(returns_arr.mean())
+    std_r = float(returns_arr.std())
+    if std_r > 0:
+        result['sharpe_ratio'] = round(mean_r / std_r, 2)
+
+    # Signal quality composite (0-100)
+    # Combines win rate, avg return, and Sharpe
+    sq = 0.0
+    if result['win_rate'] >= 50:
+        sq += 30 + min(20, (result['win_rate'] - 50) * 1.0)
+    else:
+        sq += max(0, result['win_rate'] * 0.6)
+    if result['avg_return'] > 0:
+        sq += min(25, result['avg_return'] * 3)
+    if result['sharpe_ratio'] > 0:
+        sq += min(25, result['sharpe_ratio'] * 15)
+
+    result['signal_quality'] = round(max(0, min(100, sq)), 1)
+
+    # Pass/fail criteria
+    result['passed'] = (
+        result['win_rate'] >= 45
+        and result['avg_return'] > -2
+        and result['max_drawdown'] >= -45
+        and result['signal_quality'] >= 35
+    )
+
+    parts = []
+    if result['passed']:
+        parts.append(f"PASS: WR={result['win_rate']:.0f}%, AvgR={result['avg_return']:.1f}%, SQ={result['signal_quality']:.0f}")
+    else:
+        fails = []
+        if result['win_rate'] < 45:
+            fails.append(f"WR={result['win_rate']:.0f}%<45%")
+        if result['avg_return'] <= -2:
+            fails.append(f"AvgR={result['avg_return']:.1f}%<=-2%")
+        if result['max_drawdown'] < -45:
+            fails.append(f"DD={result['max_drawdown']:.0f}%<-45%")
+        if result['signal_quality'] < 35:
+            fails.append(f"SQ={result['signal_quality']:.0f}<35")
+        parts.append(f"FAIL: {', '.join(fails)}")
+    result['detail'] = ' | '.join(parts)
+
+    return result
+
+
+def backtest_validate_candidates_batch(
+    candidates: List[dict],
+    hist_cache: Dict[str, pd.DataFrame],
+    lookback_days: int = 120,
+    hold_period: int = 20,
+    max_candidates: int = 30,
+) -> List[dict]:
+    """Run backtest validation on a batch of discovery candidates.
+
+    Parameters
+    ----------
+    candidates : List[dict]
+        Scored candidates from discovery_engine.score_candidates().
+    hist_cache : Dict[str, pd.DataFrame]
+        Price histories.
+    lookback_days : int
+        Validation lookback period.
+    hold_period : int
+        Hold period for each simulated trade.
+    max_candidates : int
+        Maximum candidates to validate (top N by alpha score).
+
+    Returns
+    -------
+    List[dict]
+        Candidates enriched with backtest validation results, sorted by
+        signal_quality descending.
+    """
+    results = []
+    for c in candidates[:max_candidates]:
+        sym = c.get('symbol', '')
+        hist = hist_cache.get(sym)
+        validation = backtest_validate_candidate(
+            sym, hist, lookback_days=lookback_days, hold_period=hold_period,
+        )
+        # Merge validation into candidate dict
+        enriched = dict(c)
+        enriched['bt_n_trades'] = validation['n_trades']
+        enriched['bt_win_rate'] = validation['win_rate']
+        enriched['bt_avg_return'] = validation['avg_return']
+        enriched['bt_max_drawdown'] = validation['max_drawdown']
+        enriched['bt_sharpe'] = validation['sharpe_ratio']
+        enriched['bt_signal_quality'] = validation['signal_quality']
+        enriched['bt_passed'] = validation['passed']
+        enriched['bt_detail'] = validation['detail']
+        results.append(enriched)
+
+    # Sort by signal quality descending
+    results.sort(key=lambda x: x.get('bt_signal_quality', 0), reverse=True)
+    return results
+
+
 if __name__ == '__main__':
     args = parse_args()
     run_backtest(args)

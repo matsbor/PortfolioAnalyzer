@@ -304,3 +304,88 @@ class TestRebalanceTrades:
         )
         # Both differences are 0.2%, below the 0.5% threshold
         assert trades == []
+
+
+# ===================================================================
+# 9. Portfolio Health Score
+# ===================================================================
+
+from portfolio_optimizer import calculate_portfolio_health_score
+
+class TestPortfolioHealthScore:
+
+    def test_returns_valid_structure(self):
+        cache = _make_hist_cache(n_symbols=4, n_days=60)
+        weights = {f"SYM{i}": 0.25 for i in range(4)}
+        result = calculate_portfolio_health_score(cache, weights)
+        assert 'health_score' in result
+        assert 'diversification' in result
+        assert 'return_efficiency' in result
+        assert 'risk_score' in result
+        assert 0 <= result['health_score'] <= 100
+
+    def test_concentrated_portfolio_low_diversification(self):
+        cache = _make_hist_cache(n_symbols=2, n_days=60)
+        weights = {"SYM0": 0.90, "SYM1": 0.10}
+        result = calculate_portfolio_health_score(cache, weights)
+        assert result['diversification'] < 50
+
+    def test_equal_weight_good_diversification(self):
+        cache = _make_hist_cache(n_symbols=8, n_days=60)
+        weights = {f"SYM{i}": 0.125 for i in range(8)}
+        result = calculate_portfolio_health_score(cache, weights)
+        assert result['diversification'] >= 60
+
+    def test_empty_inputs(self):
+        result = calculate_portfolio_health_score({}, {})
+        assert result['health_score'] == 50.0
+
+
+# ===================================================================
+# 10. Discovery-Aware Rebalancing
+# ===================================================================
+
+from portfolio_optimizer import integrate_discovery_into_rebalance
+
+class TestDiscoveryRebalance:
+
+    def test_generates_trades_from_swaps(self):
+        current_weights = {"OLD1": 0.25, "OLD2": 0.25, "KEEP1": 0.25, "KEEP2": 0.25}
+        swaps = [
+            {
+                'sell_symbol': 'OLD1', 'buy_symbol': 'NEW1',
+                'confidence': 'High', 'alpha_improvement': 20,
+            },
+        ]
+        trades = integrate_discovery_into_rebalance(
+            current_weights, swaps, portfolio_value=200_000,
+            prices={"OLD1": 10.0, "NEW1": 15.0, "OLD2": 8.0, "KEEP1": 20.0, "KEEP2": 12.0}
+        )
+        symbols = {t['symbol'] for t in trades}
+        assert 'OLD1' in symbols  # Should be selling OLD1
+        assert 'NEW1' in symbols  # Should be buying NEW1
+
+    def test_no_swaps_no_trades(self):
+        current_weights = {"A": 0.5, "B": 0.5}
+        trades = integrate_discovery_into_rebalance(
+            current_weights, [], portfolio_value=100_000
+        )
+        assert len(trades) == 0
+
+    def test_confidence_scales_allocation(self):
+        current_weights = {"OLD": 0.50, "KEEP": 0.50}
+        # High confidence swap
+        swaps_high = [{'sell_symbol': 'OLD', 'buy_symbol': 'NEW', 'confidence': 'High'}]
+        trades_high = integrate_discovery_into_rebalance(
+            current_weights, swaps_high, portfolio_value=100_000
+        )
+        # Low confidence swap
+        swaps_low = [{'sell_symbol': 'OLD', 'buy_symbol': 'NEW', 'confidence': 'Low'}]
+        trades_low = integrate_discovery_into_rebalance(
+            current_weights, swaps_low, portfolio_value=100_000
+        )
+        # High confidence should result in larger NEW position
+        new_high = next((t for t in trades_high if t['symbol'] == 'NEW'), None)
+        new_low = next((t for t in trades_low if t['symbol'] == 'NEW'), None)
+        if new_high and new_low:
+            assert new_high['trade_value'] >= new_low['trade_value']

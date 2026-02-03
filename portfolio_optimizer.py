@@ -755,3 +755,187 @@ def suggest_rebalance_trades(
     # Sort: largest trades first
     trades.sort(key=lambda t: t["trade_value"], reverse=True)
     return trades
+
+
+# ---------------------------------------------------------------------------
+# 9. Discovery-aware rebalancing
+# ---------------------------------------------------------------------------
+
+def calculate_portfolio_health_score(
+    hist_cache: Dict[str, pd.DataFrame],
+    weights: Dict[str, float],
+) -> dict:
+    """Calculate a composite portfolio health score.
+
+    Evaluates diversification, risk concentration, and return efficiency.
+
+    Parameters
+    ----------
+    hist_cache : Dict[str, pd.DataFrame]
+        Ticker -> DataFrame with ``Close`` column.
+    weights : Dict[str, float]
+        Current portfolio weights.
+
+    Returns
+    -------
+    dict
+        ``{'health_score': float (0-100), 'diversification': float,
+           'return_efficiency': float, 'risk_score': float, 'details': list[str]}``
+    """
+    result = {
+        'health_score': 50.0,
+        'diversification': 50.0,
+        'return_efficiency': 50.0,
+        'risk_score': 50.0,
+        'details': [],
+    }
+
+    if not hist_cache or not weights:
+        return result
+
+    # Diversification: based on number of positions and weight distribution
+    n_positions = len([w for w in weights.values() if w > 0.01])
+    max_weight = max(weights.values()) if weights else 0
+    hhi = sum(w ** 2 for w in weights.values())  # Herfindahl-Hirschman Index
+
+    # HHI of 1/n = perfectly diversified; HHI of 1.0 = single stock
+    diversification = max(0, min(100, (1 - hhi) * 100))
+    if n_positions < 5:
+        diversification *= 0.7
+    if max_weight > 0.20:
+        diversification *= 0.85
+
+    result['diversification'] = round(diversification, 1)
+
+    # Return efficiency: portfolio Sharpe-like metric
+    close_map = {}
+    for sym, df in hist_cache.items():
+        if df is not None and not df.empty and 'Close' in df.columns and sym in weights:
+            s = df['Close'].dropna()
+            if len(s) >= 30:
+                s.index = pd.to_datetime(s.index)
+                close_map[sym] = s
+
+    if len(close_map) >= 2:
+        symbols = sorted(close_map.keys())
+        aligned = pd.DataFrame({s: close_map[s] for s in symbols}).dropna()
+        if len(aligned) >= 30:
+            daily_ret = aligned.pct_change().dropna()
+            w_arr = np.array([weights.get(s, 0) for s in symbols])
+            w_sum = w_arr.sum()
+            if w_sum > 0:
+                w_arr = w_arr / w_sum
+                port_ret = daily_ret.values @ w_arr
+                mean_r = float(np.mean(port_ret)) * 252
+                std_r = float(np.std(port_ret)) * np.sqrt(252)
+                if std_r > 0:
+                    sharpe = mean_r / std_r
+                    result['return_efficiency'] = round(
+                        max(0, min(100, 50 + sharpe * 20)), 1
+                    )
+
+    # Risk score: drawdown-based
+    risk_score = 70.0  # Default moderate
+    if close_map:
+        max_dds = []
+        for sym, s in close_map.items():
+            if len(s) >= 30:
+                window = s.tail(90)
+                cummax = window.cummax()
+                dd = ((window - cummax) / cummax).min()
+                max_dds.append(abs(float(dd)) * 100)
+        if max_dds:
+            avg_dd = np.mean(max_dds)
+            if avg_dd > 40:
+                risk_score = 30.0
+            elif avg_dd > 25:
+                risk_score = 50.0
+            elif avg_dd > 15:
+                risk_score = 65.0
+            else:
+                risk_score = 85.0
+
+    result['risk_score'] = round(risk_score, 1)
+
+    # Composite
+    result['health_score'] = round(
+        diversification * 0.3 + result['return_efficiency'] * 0.4 + risk_score * 0.3,
+        1,
+    )
+
+    result['details'] = [
+        f"Diversification: {diversification:.0f}/100 (HHI={hhi:.3f}, {n_positions} positions)",
+        f"Return Efficiency: {result['return_efficiency']:.0f}/100",
+        f"Risk Score: {risk_score:.0f}/100",
+    ]
+
+    return result
+
+
+def integrate_discovery_into_rebalance(
+    current_weights: Dict[str, float],
+    swap_recommendations: List[dict],
+    portfolio_value: float,
+    prices: Optional[Dict[str, float]] = None,
+    max_new_position_pct: float = 0.05,
+) -> List[dict]:
+    """Generate trade list that incorporates discovery swap recommendations.
+
+    Takes the swap recommendations from the discovery engine and converts
+    them into concrete rebalance trades (sell existing + buy new).
+
+    Parameters
+    ----------
+    current_weights : Dict[str, float]
+        Current portfolio weights.
+    swap_recommendations : List[dict]
+        Output of discovery_engine.generate_swap_recommendations().
+    portfolio_value : float
+        Total portfolio value.
+    prices : Dict[str, float], optional
+        Current prices for share estimation.
+    max_new_position_pct : float
+        Maximum weight for any new position.
+
+    Returns
+    -------
+    List[dict]
+        Trades in the same format as suggest_rebalance_trades().
+    """
+    target_weights = dict(current_weights)
+    prices = prices or {}
+
+    for swap in swap_recommendations:
+        sell_sym = swap.get('sell_symbol', '')
+        buy_sym = swap.get('buy_symbol', '')
+
+        if not sell_sym or not buy_sym:
+            continue
+
+        # Free up weight from the sell
+        sell_weight = target_weights.get(sell_sym, 0)
+        freed_weight = sell_weight * 0.5  # Sell half the position
+
+        # Confidence-scaled allocation
+        confidence = swap.get('confidence', 'Low')
+        if confidence == 'High':
+            alloc_factor = 1.0
+        elif confidence == 'Medium':
+            alloc_factor = 0.7
+        else:
+            alloc_factor = 0.4
+
+        new_weight = min(freed_weight * alloc_factor, max_new_position_pct)
+
+        target_weights[sell_sym] = sell_weight - freed_weight
+        target_weights[buy_sym] = target_weights.get(buy_sym, 0) + new_weight
+
+    # Normalize if weights exceed 1.0
+    total = sum(target_weights.values())
+    if total > 1.0:
+        target_weights = {k: v / total for k, v in target_weights.items()}
+
+    return suggest_rebalance_trades(
+        current_weights, target_weights, portfolio_value,
+        min_trade_pct=0.3, prices=prices,
+    )

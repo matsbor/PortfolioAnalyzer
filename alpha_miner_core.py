@@ -551,7 +551,7 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
     models = {}
     breakdown = []
 
-    # === M1: Momentum (15%) — multi-timeframe + RSI ===========================
+    # === M1: Momentum (15%) — multi-timeframe + RSI + MACD + Volume ==========
     ret_30d = row.get('Return_30d', 0)
     ret_90d = row.get('Return_90d', 0)
     rsi_val = row.get('RSI', None)
@@ -606,9 +606,72 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
     else:
         m1_rsi_adj = 0
 
-    momentum_score = max(0, min(100, m1_30d + m1_90d_adj + m1_rsi_adj))
+    # MACD crossover signal (new) — catches momentum shifts earlier than price returns
+    m1_macd_adj = 0
+    m1_macd_detail = ""
+    if hist_data is not None and not hist_data.empty and len(hist_data) >= 35:
+        try:
+            _close = hist_data['Close'].dropna()
+            _ema12 = _close.ewm(span=12, adjust=False).mean()
+            _ema26 = _close.ewm(span=26, adjust=False).mean()
+            _macd_line = _ema12 - _ema26
+            _signal_line = _macd_line.ewm(span=9, adjust=False).mean()
+            _macd_hist = _macd_line - _signal_line
+            # Check for recent bullish crossover (MACD line crosses above signal)
+            if len(_macd_hist) >= 3:
+                _cur_hist = float(_macd_hist.iloc[-1])
+                _prev_hist = float(_macd_hist.iloc[-2])
+                if _cur_hist > 0 and _prev_hist <= 0:
+                    m1_macd_adj = 7   # Fresh bullish crossover
+                    m1_macd_detail = "MACD bullish cross"
+                elif _cur_hist > 0 and _cur_hist > _prev_hist:
+                    m1_macd_adj = 4   # MACD histogram expanding (momentum building)
+                    m1_macd_detail = "MACD expanding"
+                elif _cur_hist < 0 and _prev_hist >= 0:
+                    m1_macd_adj = -6  # Fresh bearish crossover
+                    m1_macd_detail = "MACD bearish cross"
+                elif _cur_hist < 0 and _cur_hist < _prev_hist:
+                    m1_macd_adj = -3  # MACD histogram declining
+                    m1_macd_detail = "MACD declining"
+        except Exception:
+            pass
+
+    # Volume acceleration (new) — confirms price momentum with institutional participation
+    m1_vol_adj = 0
+    m1_vol_detail = ""
+    if hist_data is not None and 'Volume' in hist_data.columns and len(hist_data) >= 20:
+        try:
+            _vol = hist_data['Volume'].dropna()
+            _close = hist_data['Close'].dropna()
+            if len(_vol) >= 20 and len(_close) >= 5:
+                _avg_vol_20 = float(_vol.tail(20).mean())
+                _avg_vol_5 = float(_vol.tail(5).mean())
+                _price_change_5d = float(_close.iloc[-1] / _close.iloc[-5] - 1) if _close.iloc[-5] > 0 else 0
+                if _avg_vol_20 > 0:
+                    _vol_ratio = _avg_vol_5 / _avg_vol_20
+                    # Rising price + rising volume = accumulation
+                    if _price_change_5d > 0.02 and _vol_ratio > 1.5:
+                        m1_vol_adj = 6
+                        m1_vol_detail = f"Vol surge +{(_vol_ratio-1)*100:.0f}% on up move"
+                    elif _price_change_5d > 0 and _vol_ratio > 1.2:
+                        m1_vol_adj = 3
+                        m1_vol_detail = "Mild vol accumulation"
+                    # Falling price + rising volume = distribution
+                    elif _price_change_5d < -0.02 and _vol_ratio > 1.5:
+                        m1_vol_adj = -5
+                        m1_vol_detail = "Vol surge on down move (distribution)"
+        except Exception:
+            pass
+
+    momentum_score = max(0, min(100, m1_30d + m1_90d_adj + m1_rsi_adj + m1_macd_adj + m1_vol_adj))
     models['M1_Momentum'] = momentum_score * 0.15
-    breakdown.append(f"M1 Momentum: {momentum_score}/100 x 15% = {models['M1_Momentum']:.1f} (30d:{ret_30d:+.1f}%, 90d:{ret_90d:+.1f}%, RSI:{rsi_val:.0f})")
+    _m1_extras = []
+    if m1_macd_detail:
+        _m1_extras.append(m1_macd_detail)
+    if m1_vol_detail:
+        _m1_extras.append(m1_vol_detail)
+    _m1_extra_str = f", {', '.join(_m1_extras)}" if _m1_extras else ""
+    breakdown.append(f"M1 Momentum: {momentum_score}/100 x 15% = {models['M1_Momentum']:.1f} (30d:{ret_30d:+.1f}%, 90d:{ret_90d:+.1f}%, RSI:{rsi_val:.0f}{_m1_extra_str})")
 
     # === M2: Value Positioning (10%) — distance from high + P/B ===============
     pct_from_high = row.get('Pct_From_52w_High', 0)
@@ -672,22 +735,40 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
     models['M5_Liquidity'] = liq_score * 0.05
     breakdown.append(f"M5 Liquidity: {liq_score}/100 x 5% = {models['M5_Liquidity']:.1f} ({tier})")
 
-    # === M6: Relative Strength (7%) ==========================================
+    # === M6: Relative Strength (7%) — multi-timeframe vs benchmark ===========
+    # Enhanced: Compares both 30d and 90d relative performance, and checks
+    # whether the stock is accelerating vs the benchmark (momentum improving).
     rel_score = 50
+    m6_detail = ""
     if benchmark_data is not None and not hist_data.empty:
         try:
-            n = min(90, len(hist_data) - 1, len(benchmark_data) - 1)
-            if n >= 20:
-                stock_ret = (hist_data['Close'].iloc[-1] / hist_data['Close'].iloc[-n] - 1) * 100
-                bench_ret = (benchmark_data['Close'].iloc[-1] / benchmark_data['Close'].iloc[-n] - 1) * 100
-                outperformance = stock_ret - bench_ret
-                # Continuous scoring
-                rel_score = max(10, min(90, 50 + outperformance * 2))
+            n90 = min(90, len(hist_data) - 1, len(benchmark_data) - 1)
+            n30 = min(30, len(hist_data) - 1, len(benchmark_data) - 1)
+            if n90 >= 20:
+                stock_ret_90 = (hist_data['Close'].iloc[-1] / hist_data['Close'].iloc[-n90] - 1) * 100
+                bench_ret_90 = (benchmark_data['Close'].iloc[-1] / benchmark_data['Close'].iloc[-n90] - 1) * 100
+                outperformance_90 = stock_ret_90 - bench_ret_90
+                # Base score from 90d outperformance
+                rel_score = max(10, min(90, 50 + outperformance_90 * 2))
+                m6_detail = f"90d: {outperformance_90:+.1f}%"
+
+            if n30 >= 10:
+                stock_ret_30 = (hist_data['Close'].iloc[-1] / hist_data['Close'].iloc[-n30] - 1) * 100
+                bench_ret_30 = (benchmark_data['Close'].iloc[-1] / benchmark_data['Close'].iloc[-n30] - 1) * 100
+                outperformance_30 = stock_ret_30 - bench_ret_30
+                # Acceleration bonus: 30d outperformance > 90d = strengthening trend
+                if n90 >= 20 and outperformance_30 > outperformance_90 + 3:
+                    rel_score = min(95, rel_score + 8)
+                    m6_detail += ", accelerating"
+                elif n90 >= 20 and outperformance_30 < outperformance_90 - 5:
+                    rel_score = max(10, rel_score - 5)
+                    m6_detail += ", decelerating"
         except Exception:
             pass
 
     models['M6_RelStrength'] = rel_score * 0.07
-    breakdown.append(f"M6 RelStrength: {rel_score:.0f}/100 x 7% = {models['M6_RelStrength']:.1f}")
+    _m6_extra = f" ({m6_detail})" if m6_detail else ""
+    breakdown.append(f"M6 RelStrength: {rel_score:.0f}/100 x 7% = {models['M6_RelStrength']:.1f}{_m6_extra}")
 
     # === M7: SMC (8%) — placeholder, replaced after SMC calculation ===========
     # Derive a basic structure score from price data when SMC is not pre-computed
@@ -757,11 +838,13 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
     breakdown.append(f"M8 StageFit: {stage_score}/100 x 5% = {models['M8_StageFit']:.1f} ({stage}/{metal})")
 
     # === M9: Vol/Momentum Risk Assessment (7%) ================================
+    # Enhanced: Uses Bollinger Band width dynamics + trend-adjusted volatility
     volatility = row.get('Volatility_60d', 0)
     current_price = row.get('Price', 0)
     sma200 = row.get('MA200', 0)
 
     vol_momentum_score = 50
+    m9_detail = ""
     if volatility > 0 and sma200 > 0:
         trend_down = current_price < sma200
         if trend_down:
@@ -781,8 +864,46 @@ def calculate_alpha_models(row, hist_data, benchmark_data):
             else:
                 vol_momentum_score = 55
 
+    # Bollinger Band width dynamics — detect squeeze-to-expansion transitions
+    m9_bb_adj = 0
+    if hist_data is not None and not hist_data.empty and len(hist_data) >= 30:
+        try:
+            _close = hist_data['Close'].dropna()
+            if len(_close) >= 30:
+                _sma20 = _close.rolling(20).mean()
+                _std20 = _close.rolling(20).std()
+                _bb_width = (_std20 * 4) / _sma20  # Normalized band width
+                _bw = _bb_width.dropna()
+                if len(_bw) >= 10:
+                    _bw_now = float(_bw.iloc[-1])
+                    _bw_10d_ago = float(_bw.iloc[-10])
+                    # Low width expanding = breakout starting (bullish for momentum)
+                    _bw_percentile = float((_bw < _bw_now).sum()) / len(_bw) * 100
+                    if _bw_percentile < 20 and _bw_now > _bw_10d_ago:
+                        m9_bb_adj = 10
+                        m9_detail = "BB squeeze breakout"
+                    elif _bw_percentile < 30:
+                        m9_bb_adj = 5
+                        m9_detail = "BB tightening"
+                    # Very wide bands contracting = momentum exhaustion
+                    elif _bw_percentile > 85 and _bw_now < _bw_10d_ago:
+                        m9_bb_adj = -5
+                        m9_detail = "BB expansion cooling"
+        except Exception:
+            pass
+
+    # Volatility regime quality: low-vol + uptrend is the ideal setup
+    m9_vol_quality = 0
+    if volatility > 0:
+        if volatility < 25 and not (sma200 > 0 and current_price < sma200):
+            m9_vol_quality = 5  # Low vol in uptrend = quality setup
+        elif volatility > 60 and sma200 > 0 and current_price < sma200:
+            m9_vol_quality = -5  # High vol in downtrend = danger
+
+    vol_momentum_score = max(0, min(100, vol_momentum_score + m9_bb_adj + m9_vol_quality))
     models['M9_VolMomentum'] = vol_momentum_score * 0.07
-    breakdown.append(f"M9 VolMomentum: {vol_momentum_score}/100 x 7% = {models['M9_VolMomentum']:.1f}")
+    _m9_extra = f" ({m9_detail})" if m9_detail else ""
+    breakdown.append(f"M9 VolMomentum: {vol_momentum_score}/100 x 7% = {models['M9_VolMomentum']:.1f}{_m9_extra}")
 
     # === M10: Technical Analysis Composite (8%) ===============================
     # Uses pre-computed TA_Score if available, otherwise derives from hist_data
