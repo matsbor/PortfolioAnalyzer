@@ -2147,15 +2147,16 @@ with st.sidebar:
         for _, row in results_df.iterrows():
             current_pct = row.get('Pct_Portfolio', 0)
             target_pct = row.get('Recommended_Pct', current_pct)
-            if target_pct <= 0:
-                target_pct = current_pct
-            
+            # target_pct == 0 is a valid SELL signal — don't override it
+            if target_pct < 0:
+                target_pct = 0
+
             # V7.2: Calculate drift in $ terms using total_portfolio_value
             drift_pct = abs(current_pct - target_pct)
             drift_usd = (drift_pct / 100.0) * float(total_portfolio_value)
             max_drift = max(max_drift, drift_pct)
-            
-            if drift_pct > 5.0:
+
+            if drift_pct > 2.0:  # Lower threshold: 2% drift triggers action (was 5%)
                 action_required_count += 1
                 rebalance_statuses.append({
                     'symbol': row['Symbol'],
@@ -2430,16 +2431,15 @@ with st.sidebar:
         if _tk and TIINGO_AVAILABLE and TiingoClient is not None:
             try:
                 _tc = TiingoClient({"api_key": _tk})
-                _tc.get_ticker_metadata("MAG")
+                _tc.get_ticker_metadata("GOLD")
                 _tiingo_ok = True
             except Exception:
-                # V7.4: More lenient - try fetching price data as fallback
+                # More lenient - try fetching price data as fallback
                 try:
                     _tc = TiingoClient({"api_key": _tk})
-                    from datetime import datetime, timedelta
-                    end_date = datetime.now().strftime('%Y-%m-%d')
-                    start_date = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
-                    _tc.get_ticker_price("MAG", startDate=start_date, endDate=end_date)
+                    end_date = datetime.datetime.now().strftime('%Y-%m-%d')
+                    start_date = (datetime.datetime.now() - datetime.timedelta(days=5)).strftime('%Y-%m-%d')
+                    _tc.get_ticker_price("GOLD", startDate=start_date, endDate=end_date)
                     _tiingo_ok = True
                 except Exception:
                     pass
@@ -2664,11 +2664,10 @@ with st.sidebar:
                 # Import backtest runner
                 import subprocess
                 import sys
-                from datetime import datetime, timedelta
-                
+
                 # Calculate date range (last 12 months)
-                end_date = datetime.now()
-                start_date = end_date - timedelta(days=365)
+                end_date = datetime.datetime.now()
+                start_date = end_date - datetime.timedelta(days=365)
                 
                 # Run backtest
                 result = subprocess.run(
@@ -3463,15 +3462,30 @@ if st.button("Run Portfolio Analysis", type="primary", use_container_width=True)
             benchmarks=benchmarks
         )
         
-        # Apply sovereign weights to portfolio positions
+        # Apply sovereign weights to portfolio positions — respecting sell risk
         for idx, row in df.iterrows():
             symbol = row['Symbol']
             if symbol in sovereign_weights:
-                # Use sovereign weight if higher than current recommendation
                 sovereign_weight = sovereign_weights[symbol]
                 current_rec = row.get('Recommended_Pct', 0)
-                # Blend sovereign weight with current recommendation for all symbols equally
-                df.at[idx, 'Recommended_Pct'] = (sovereign_weight * 0.7) + (current_rec * 0.3)
+                blended = (sovereign_weight * 0.7) + (current_rec * 0.3)
+
+                # Sell risk override: don't let sovereign weight prop up risky positions
+                sell_risk = row.get('Sell_Risk_Score', 0)
+                action = row.get('Action', 'HOLD')
+                current_pct = row.get('Pct_Portfolio', 0)
+
+                if sell_risk >= 60 or action == 'Avoid':
+                    # Critical risk — recommend exit, sovereign weight cannot override
+                    df.at[idx, 'Recommended_Pct'] = 0
+                    if action not in ('Avoid',):
+                        df.at[idx, 'Action'] = 'Sell'
+                elif sell_risk >= 40 or action == 'REDUCE':
+                    # Moderate risk — reduce to at most 85% of current allocation
+                    risk_cap = current_pct * 0.85
+                    df.at[idx, 'Recommended_Pct'] = min(blended, risk_cap)
+                else:
+                    df.at[idx, 'Recommended_Pct'] = blended
         
         # Post-process: Strict mode + Financing Overhang enforcement
         strict_mode = st.session_state.get('strict_mode', False)
@@ -4233,12 +4247,13 @@ if 'results' in st.session_state:
         for _, row in results_df.iterrows():
             current_pct = row.get('Pct_Portfolio', 0)
             target_pct = row.get('Recommended_Pct', current_pct)
-            if target_pct <= 0:
-                target_pct = current_pct
+            # target_pct == 0 is a valid SELL signal — don't override it
+            if target_pct < 0:
+                target_pct = 0
             drift_pct = abs(current_pct - target_pct)
             drift_usd = (drift_pct / 100.0) * float(total_portfolio_value)  # V7.2: USD drift
             max_drift = max(max_drift, drift_pct)
-            if drift_pct > 5.0:
+            if drift_pct > 2.0:  # Lower threshold: 2% drift triggers action (was 5%)
                 rebalance_statuses.append({
                     'symbol': row['Symbol'],
                     'current': current_pct,
