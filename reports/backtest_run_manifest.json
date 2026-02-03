@@ -1,16 +1,16 @@
 {
-  "git_commit_hash": "f44778a3a914ac1af1156c81655328b3622ae5f9",
+  "git_commit_hash": "6975c3aa8698ce52a72494bb4ff6fa0188b98e3a",
   "python_version": "3.11.14 (main, Oct 10 2025, 08:54:04) [GCC 13.3.0]",
   "platform": "Linux-4.4.0-x86_64-with-glibc2.39",
-  "run_timestamp_utc": "2026-02-03T04:58:38.226592+00:00",
-  "cache_dir": "/tmp/pytest-of-root/pytest-20/test_default_backtest_does_not0/cache",
+  "run_timestamp_utc": "2026-02-03T18:43:07.658058+00:00",
+  "cache_dir": "/tmp/pytest-of-root/pytest-21/test_default_backtest_does_not0/cache",
   "symbols_loaded": [
     "TEST1",
     "TEST2"
   ],
   "symbols_skipped": [],
   "report_hashes": {
-    "backtest_summary.json": "6636624e82d3977ba570716ccc5c09ff045dafa86e4d0e92f359ddc9ed1fff38",
+    "backtest_summary.json": "3ecfcc51e902388159676f8a00082cb977e4bf3de2a1717edf2fab3151710a7d",
     "backtest_trades.csv": "fcdeaf18e60897646032430af4509f460bde3506ff70ca4b177dd73af3597522",
     "backtest_daily.csv": "492b5ef3ab27413b90cbe59a54ca76c8c9bdbd9834e0261a1f394cc2e91a0bf5"
   },
